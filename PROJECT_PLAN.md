@@ -122,11 +122,18 @@ SAR STS box ──► { # AIS identities in 500m/±12h,
                  GFW presence? GAP/encounter? registry match }
                      │
                      ▼
-       FUSION RULE (src/fusion.py)  →  AIS-visible | Partially-visible | Dark candidate
+       FUSION MODEL (src/fusion.py)  →  AIS-visible | Partially-visible | Dark candidate
 ```
 
-Output categories and the evaluation matrix are defined in `RESEARCH_POSITION.md` §4.
-The fusion rule is a **methodology contribution**: define it, justify it, publish it.
+Rules:
+- **Positive vs absence evidence.** Observe and gap/encounter signals are supporting;
+  `GFW presence absent` is weak / non-informative and never boosts a darkness score.
+- **Evaluated, not asserted.** The fusion model is a *classification methodology* compared
+  against AIS-only, SAR-only, AIS-threshold, and GFW-reference baselines on an
+  expert-reviewed reference set (100–300 events). No invented weights: start rule-based,
+  prefer **logistic regression** for interpretable coefficients on a small set. If fusion
+  doesn't beat baselines, report it honestly.
+- Definitions and the evaluation matrix are in `RESEARCH_POSITION.md` §4.
 
 ---
 
@@ -219,8 +226,19 @@ at same coordinate in >50% of scenes = platform/wind turbine), length plausibili
 ### Phase 6 — Dark logic + GFW reference layer + fusion (5 days)
 `src/dark_sts.py`: paper §3 verbatim — STS box → 500 m buffer → distinct MMSIs in AIS
 ±12 h → `<2` = candidate. Then `src/gfw_ref.py`: per candidate, query **GFW SAR presence,
-`matched` flag, presence grid, GAP, encounters** via `gfw-api-python-client`. Then
-`src/fusion.py` implementing the `RESEARCH_POSITION.md` §4 matrix → outcome label.
+`matched` flag, presence grid, GAP, encounters** via `gfw-api-python-client`. Then build
+`src/fusion.py` as an **evaluated classifier**, not a hand-scored heuristic:
+
+1. Assemble the evidence-state feature vector per candidate.
+2. Build the **fusion-reference set**: 100–300 candidates with expert-reviewed labels
+   (`0` non-STS / `1` probable STS / `2` probable dark / `3` high-confidence dark).
+3. Implement the four baselines (AIS-only, SAR-only, AIS-threshold 0/1/2+, GFW-reference).
+4. Fit the proposed fusion model — prefer **logistic regression** for interpretability on
+   a small set, after a rule-based sanity baseline.
+5. Report precision / recall / FPR and cross-source disagreement patterns.
+
+Keep `GFW presence absent` as non-informative (§4.2 of the research position).
+
 - Smoke test: `tests/test_fusion.py` synthetic cases — (a) 2 AIS IDs → AIS-visible;
   (b) 0 IDs + GFW SAR unmatched + GAP → strong dark candidate; (c) 1 ID → partially
   visible; (d) 0 IDs + GFW matched → possible timing error.
@@ -253,7 +271,8 @@ sentence from `RESEARCH_POSITION.md` §6 in any write-up.
 found, GFW agreement, registry info, score breakdown. `src/run_pipeline.py` chains 1→8.
 
 Write-up compares to the paper on: coverage % (yours vs ~55%), detection counts, precision,
-cost, GFW agreement rate, and the fusion matrix as the methods contribution.
+cost, and GFW agreement rate; plus the **fusion evaluation table** (baselines vs proposed:
+precision / recall / FPR) as the methods contribution.
 
 ---
 

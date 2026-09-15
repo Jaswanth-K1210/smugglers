@@ -1,8 +1,10 @@
 # Dark STS Detection on Sentinel-1 — Implementation Plan
 
+Companion: `RESEARCH_POSITION.md` is the canonical research framing; this file is the
+execution plan. Where they disagree about a claim, `RESEARCH_POSITION.md` wins.
+
 Supersedes `claude-code-build-prompt.md`. Written after reading Ballinger (2024),
-`2404.07607v1.pdf`. Where this disagrees with `dark-ship-detection-project-bible.md`,
-this wins.
+`2404.07607v1.pdf`, and the GFW API documentation (v3, `latest` datasets).
 
 ---
 
@@ -15,209 +17,243 @@ of the original bible:
 The paper builds its 20,223-tile training set *automatically*: take AIS positions at
 image time (±2h), cut a 500m tile around each ship, segment the ship with SAM, convert
 the mask to a box, and take the class label from the AIS record's vessel type. Zero
-human labeling. This is the single best idea in the paper and it is what you should
-copy. **Phases 4, 5 and 6 of the original bible (xView3 download, label conversion,
-manual fine-tuning) are deleted.** You are not downloading 2.5TB of xView3 to get
-worse point-derived labels.
+human labeling. Copy this. The original bible's xView3 plan is deleted.
 
 **2. STS is an object detection class, not a temporal rule.**
 The model has six classes, two of which are `STS Cargo` and `STS Tanker` — a single
 box drawn around two rafted vessels. The model learns what "two ships tied together"
-looks like. It never reasons about time. This is why the whole "stationary for 30+
-minutes" logic in bible §5.1 and §6 is unnecessary — and it's why single-snapshot
-Sentinel-1 works fine here.
+looks like. It never reasons about time. We keep this, but collapse to two classes
+(§"What will not transfer").
 
 **3. Dark = fewer than 2 AIS identities within 500m, ±12 hours.**
-Not 30 minutes. Detect an STS box in imagery, buffer 500m, count distinct vessel
-identities in AIS over a ±12h window. `< 2` identities = dark STS. Note this catches
-the important half-dark case: one ship broadcasting, its partner silent.
+Detect an STS box in imagery, buffer 500m, count distinct vessel identities in AIS over
+a ±12h window. `< 2` identities = dark STS. This catches the half-dark case: one ship
+broadcasting, its partner silent.
 
 Their AIS came from **Lloyd's List Intelligence** — commercial, ~1M vessels. That is
-the one paid input you have to replace, and replacing it drives the next decision.
+the one paid input we replace, and replacing it drives the next decisions.
 
 ---
 
-## The decision that determines everything: where the free raw AIS is
+## Two data decisions that shape everything
+
+### Decision 1 — where the free raw AIS is
 
 The auto-labeling method needs **raw AIS positions** (lat, lon, timestamp, MMSI, vessel
-type). Global Fishing Watch does **not** sell or serve those — its API returns derived
-*events* and gridded activity, not position streams. So the target area must be
-somewhere raw AIS is published free.
+type). Global Fishing Watch does **not** serve those — its API returns derived events and
+gridded presence, not position streams (confirmed by GFW's own FAQ).
 
-That rules out Hormuz, Malacca and Linggi for the labeling step.
+**Training regions (free raw AIS):**
 
-**Recommendation: Skagen anchorage / Danish straits (Skagerrak–Kattegat).**
+| Region | Source | Why |
+|---|---|---|
+| **Danish waters** (Skagen/Skagerrak/Kattegat) | DMA daily CSVs, free, no key | *The* documented Russian shadow-fleet STS area; good SAR overlap |
+| **Baltic** | HELCOM monthly AIS dumps | Contiguous with Skagen region; second free source |
+| **US waters** (stretch) | MarineCadastre | Free, but different format/schema — only after DK/Baltic is proven |
 
-| Why | Detail |
+**Test/generalization regions — no training, no raw AIS:**
+
+| Region | Role |
 |---|---|
-| Free raw AIS | Danish Maritime Authority publishes full historical AIS as daily CSV, free, no key. ~1.9 GB/day. |
-| Real subject matter | Skagen anchorage and the Danish straits are *the* documented Russian shadow-fleet STS site in European reporting since 2023. Abundant citable journalism. |
-| Good SAR coverage | High latitude ⇒ Sentinel-1 swath overlap ⇒ ~2–3 day revisit, better than the 6-day equatorial figure. |
-| Defensible novelty | Different geography from the paper's Kerch Strait, and a politically live one. |
+| Hormuz | Unseen-chokepoint generalization |
+| Malacca | Unseen-chokepoint generalization |
+| Kerch | Direct comparison to the paper's region |
 
-If you reject Skagen, your fallback is US waters (MarineCadastre free raw AIS) — but
-there is no comparable dark-fleet STS story there, so the project loses its point.
-Pick Skagen unless you have a strong reason not to.
+Per `RESEARCH_POSITION.md` §6: these are **cross-region generalization / reference
+analysis**, validated partly against GFW gridded presence — not equivalent ground truth.
 
----
+### Decision 2 — GFW is a reference layer, not a source and not ground truth
 
-## Your contribution over the paper — state these four, they're real
+GFW publishes **global Sentinel-1 SAR vessel detections** (2017 → ~5 days ago) with a
+`matched='false'` filter, vessel presence grids, AIS-off (GAP) events, encounters, and a
+vessel registry API. This is enormously useful — but:
 
-1. **Free SAR replaces paid optical.** The stated goal. PlanetScope is ~$2/km²; you pay ₹0.
-2. **Cloud immunity — quantify this, it's your headline.** The paper discarded scenes
-   above 0.7 cloud and ended with imagery on **55% of days**. SAR sees through cloud
-   and darkness; you lose ~0%. In the North Sea/Baltic, which is cloudier than the
-   Black Sea, an optical pipeline would do *worse* than 55%. Compute your actual
-   coverage % and put it next to their 55% — that single number justifies the paper.
-3. **External validation the original never had.** The paper validates dark STS against
-   nothing but its own AIS. You cross-check against **GFW's independent `gaps`
-   (AIS-off) and `encounters` event datasets** — a second, independently-derived
-   opinion on whether a vessel went dark. This is a genuine methodological upgrade.
-4. **Suspicion scoring + capacity estimation.** Scoring is your own layer; capacity
-   estimation from bounding-box diagonal is explicitly listed as future work in the
-   paper's conclusion (§4), so implementing it is a direct, citable extension.
+- GFW's products are **modeled/estimated** (GFW documents caveats itself).
+- GFW's SAR detections come from the **same Sentinel-1 sensor** we use, so comparing us to
+  them is *cross-system*, not *ground-truth* validation.
+- `matched='false'` means **AIS-unmatched**, not "dark." Dark is a fused conclusion.
+
+We use GFW as: (1) a **comparison/benchmark layer**, (2) the **C** region of an
+evaluation matrix, (3) **registry enrichment** for vessel type/flag/length of matched or
+suspected vessels, including OFAC-linked lists.
+
+**Do not write "GFW validates us" in the paper.**
 
 ---
 
-## Two things that will *not* transfer, adjust now
+## Contributions over the paper — reframed (see RESEARCH_POSITION §7)
+
+1. **Open-data reproduction** — free SAR + open AIS vs their commercial stack.
+2. **Multi-signal dark-STS framework** — SAR + AIS + GFW SAR + presence + encounters +
+   registry → structured event classification.
+3. **Fusion methodology** — the research heart (§"Fusion engine").
+4. **Cross-region generalization** — train Europe, test Kerch/Hormuz/Malacca.
+5. **Registry enrichment for vessel types** — "all types" via identity, not visual CNN.
+6. **Reproducibility** — ₹0 re-runnable experiment.
+
+---
+
+## What will not transfer from the paper, adjust now
 
 **Six classes collapse to two.** Sentinel-1 IW GRD is 10 m/pixel; PlanetScope is 3 m.
-A 6,000 DWT general cargo ship is ~100 m = **10 pixels**. You cannot tell a bulk
-carrier from a general cargo ship at 10 pixels — nobody can. Train on:
+A 6,000 DWT general cargo ship is ~100 m = **10 pixels**. You cannot tell a bulk carrier
+from a general cargo ship at 10 pixels — nobody can. Train on:
 
 - `vessel`
 - `sts` (two or more rafted)
 
 Optionally add a size split (`vessel_large` ≥150 m) since length *is* measurable at
-this resolution. Do not attempt the paper's six classes.
+this resolution. Vessel type/flag/length for the final dashboard comes from **GFW Vessel
+API registry enrichment on AIS matches** — never from the CNN.
 
-**Do not expect 97% F1.** That number is 3 m optical on six well-separated classes.
+**Do not expect 97% F1 / 99% mAP50.** That is 3 m optical on six well-separated classes.
 On 10 m SAR with two classes, budget for mAP50 in the 0.6–0.8 range and report it
-honestly. A lower number on free imagery is still a publishable result; a fabricated
-high one is not.
+honestly. A lower number on free imagery is still a publishable result.
+
+---
+
+## Fusion engine (research heart)
+
+Every STS candidate is a tuple of weak signals — never a single `dark` flag:
+
+```
+SAR STS box ──► { # AIS identities in 500m/±12h,
+                 GFW SAR detection? GFW matched?
+                 GFW presence? GAP/encounter? registry match }
+                     │
+                     ▼
+       FUSION RULE (src/fusion.py)  →  AIS-visible | Partially-visible | Dark candidate
+```
+
+Output categories and the evaluation matrix are defined in `RESEARCH_POSITION.md` §4.
+The fusion rule is a **methodology contribution**: define it, justify it, publish it.
 
 ---
 
 ## Pipeline
 
 ```
-DMA AIS CSV ──┬─► STS events in AIS (500m, <1kn)  ──► labels ──┐
-              │                                                ├──► YOLOv8 (vessel, sts)
-Sentinel Hub ─┴─► calibrated S1 GeoTIFF ──► 512px tiles ───────┘
-                                                                    │
-                                            inference on held-out scenes
-                                                                    ▼
-                          STS box ──► 500m buffer, AIS ±12h ──► <2 identities = DARK
-                                                                    ▼
-                                   GFW gaps/encounters cross-check (validation)
-                                                                    ▼
-                                        suspicion score ──► Folium map
+DMA/HELCOM AIS ──┬─► STS events in AIS (500m, ≥1h, <1kn) ──► weak labels ──┐
+                 │                                                        ├─► YOLOv8 (vessel, sts)
+CDSE Sentinel Hub ┴─► calibrated S1 GeoTIFF ──► 512px tiles ───────────────┘
+                                                                           │
+                                          inference on held-out + unseen scenes
+                                                                           ▼
+                          STS box ──► 500m buffer, AIS ±12h ──► 0/1/2+ identities
+                                                                           │
+                 ┌─────────────────────────────────────────────────────────┘
+                 ▼
+        GFW reference: SAR presence · matched? · presence grid · GAPs · encounters
+                 ▼
+        Registry enrichment (type/flag/length/OFAC) for matches
+                 ▼
+              FUSION ENGINE ──► AIS-visible | Partially-visible | Dark candidate
+                 ▼
+        Size-binned disagreement analysis (your YOLO vs GFW SAR)
+                 ▼
+          dashboard (Next.js + Leaflet)
 ```
 
 ---
 
 ## Phases
 
-Same discipline as the original: finish a phase, run its smoke test, **stop**, show
-results, wait for "continue". Each phase below also has a **kill criterion** — a
-result that means stop and rethink rather than push on.
+Finish a phase, run its smoke test, **stop**, show results, wait for "continue". Each
+phase has a **kill criterion** — a result that means stop and rethink.
 
-### Phase 0 — Setup and the one question that matters (½ day)
-Env, folders, `.env` for `CDSE_CLIENT_ID` / `CDSE_CLIENT_SECRET` / `GFW_API_TOKEN`.
-Then immediately: download **one day** of DMA AIS CSV for your box and **one** GFW
-`gaps` events query over the same box/period.
+### Phase 0 — Prove or kill the STS data (Days 1–7) ⚠️ THE PROJECT'S ONLY REAL GATE
+This is not optional. Before any ML code:
 
-- Smoke test: `tests/test_env.py` prints versions; print AIS row count and 5 rows; print GFW gap event count.
-- **Kill criterion:** if the DMA CSV has no vessels in your box, or GFW returns zero gap events for the region over a year — change the box now, not in week five.
+1. Set up env, folders, `.env` for `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET`/`GFW_API_TOKEN`.
+2. Download **one month** of DMA AIS CSV for the bbox + one month HELCOM.
+3. Run `src/ais_sts.py` (paper §2.2 rule) over it. Count STS events.
+4. Match a handful to Sentinel-1 overpasses (`src/fetch_s1.py` initial test).
+5. Confirm **≥50 genuine AIS-derived STS events/year** in-region and that imagery matches them.
 
-### Phase 1 — AIS ingest and STS event extraction (3 days)
-`src/ais.py`: load DMA daily CSVs, filter to bbox, keep `mmsi, lat, lon, timestamp,
-sog, ship_type, length`. Then `src/ais_sts.py` implementing the paper §2.2 rule:
-vessels within **500 m** of each other for **≥1 hour** at **SOG < 1 knot** = an STS
-event. This is the paper's rule verbatim; don't invent your own.
+- Smoke test: `tests/test_env.py`; print STS event count; plot 3 events on a map; show tracks
+  converge and sit still.
+- **Kill criterion:** <50 STS events/yr, or overpass matching fails → **change training
+  region now.** Do not build the detector on a dead data assumption.
 
-- Smoke test: run over one month; report count of STS events; plot 3 on a map and eyeball that the two tracks converge and sit still.
-- **Kill criterion:** fewer than ~50 AIS STS events per year in your box means too little training signal — widen the box.
+### Phase 1 — AIS ingest + STS event extraction (3 days)
+`src/ais.py`: load DMA/HELCOM, filter to bbox, keep `mmsi, lat, lon, timestamp, sog,
+ship_type, length`. `src/ais_sts.py`: vessels within **500 m** for **≥1 hour** at **SOG<1**
+= STS event — the paper's rule verbatim. Store events as a **research dataset**
+(`event_id, timestamp, lat, lon, vessel_1, vessel_2, distance, duration, mean_SOG, region`).
+
+- Kill criterion: fewer than ~50 STS events/year → widen box or move region (Phase 0 gate
+  still applies).
 
 ### Phase 2 — Sentinel-1 acquisition, no SNAP (2 days)
-`src/fetch_s1.py` using **CDSE Sentinel Hub Process API**, which returns already
-calibrated and geocoded S1 GRD as GeoTIFF for a bbox+date. This deletes the SNAP
-install, the 1 GB `.zip` downloads, and the tiling of enormous scenes.
+`src/fetch_s1.py` via **CDSE Sentinel Hub Process API** (returns calibrated, geocoded
+GRD GeoTIFF directly). Request VV, linear-to-dB, 10 m. Pull scenes over the STS-event
+timestamps.
+- Kill criterion: free quota can't cover ~150 scenes → fall back to `cdsetool` GRD
+  downloads for a smaller area.
 
-The bible's SNAP `gpt` commands (§2.5) do not run as written — chaining needs
-BEAM-DIMAP intermediates and Terrain-Correction needs a DEM argument. Skip all of it.
-Request VV, linear-to-dB, 10 m.
-
-- Smoke test: pull one 20×20 km scene; open in rasterio; save a PNG; confirm you can see the coastline and bright dots on dark water.
-- **Kill criterion:** if the free Sentinel Hub quota won't cover ~150 scenes, fall back to `cdsetool` + full GRD download for a smaller area.
-
-### Phase 3 — Auto-labeling ⚠️ THE PHASE THAT DECIDES THE PROJECT (1 week)
-`src/autolabel.py`. For each S1 scene, take AIS positions within ±30 min of overpass
-(use the exact acquisition time from scene metadata; ±2h in the paper is too loose for
-ships underway — at 12 knots a ship moves 44 km in 2 hours).
-
+### Phase 3 — Auto-labeling (1 week) ⚠️ labels decide downstream accuracy
+`src/autolabel.py`. For each S1 scene, AIS positions within **±30 min** of overpass, then:
 1. Project AIS lat/lon to pixels (`rasterio` `src.index`).
-2. Extract a tight box around the bright blob at that pixel: **adaptive threshold +
-   connected components** (scipy), not SAM. Ships are 10–30 dB brighter than sea
-   clutter; a 20-pixel bright blob on dark water does not need a 2.4 GB foundation
-   model. Keep a `sam` flag for later if thresholding disappoints.
-3. Class: if this AIS position belongs to a Phase-1 STS event → `sts`, else `vessel`.
+2. Extract a tight box via **adaptive threshold + connected components** (scipy), not SAM.
+   Keep a `sam` flag if thresholding disappoints.
+3. Class: AIS position in a Phase-1 STS event → `sts`, else `vessel`.
 4. Write YOLO `.txt`, tile to 512 px, drop empty tiles.
 
-- Smoke test (**do this by eye, do not skip**): draw generated boxes on 20 tiles, save PNGs, and personally confirm the boxes land on ships. Report what fraction do.
-- **Kill criterion:** if under ~70% of boxes land on an actual bright target, stop. Either overpass-time matching or geolocation is broken, and everything downstream inherits the error.
+- Smoke test: draw boxes on 20 tiles, save PNGs, personally confirm the boxes land on ships.
+- **Kill criterion:** <70% of boxes hit a bright target → overpass-time or geolocation is
+  broken; everything downstream inherits the error.
 
-### Phase 4 — Train (3 days, mostly waiting)
-`src/train.py`, Ultralytics YOLOv8. Start `yolov8n.pt`; move to `yolov8s`/`m` only if
-`n` underperforms. 512 px, 80/20 split, **split by scene not by tile** — tiles from
-one scene are correlated and a random split will inflate your metrics.
+### Phase 4 — Train (3 days)
+`src/train.py`, Ultralytics YOLOv8. Start `yolov8n.pt`; escalate only if `n` underperforms.
+512 px, 80/20, **split by scene not tile**.
+- Smoke test: 3 epochs, loss falls, then approval for full run.
+- **Kill criterion:** mAP50 < 0.4 after full training → Phase 3 labels are wrong.
 
-- Smoke test: 3 epochs, confirm loss falls, then request approval for the full run.
-- **Kill criterion:** mAP50 < 0.4 after full training ⇒ go back to Phase 3, the labels are wrong.
+### Phase 5 — False-positive control (4 days) ⚠️ SAR-specific, not in the paper
+`src/filters.py`: land/coastline mask (OSM/GSHHG), **static-infrastructure mask** (target
+at same coordinate in >50% of scenes = platform/wind turbine), length plausibility gate
+(30–400 m).
+- Smoke test: hand-inspect **100 random detections**; report precision pre/post filter.
+- **Kill criterion:** post-filter precision < 0.5 → counts are noise; fix before proceeding.
 
-### Phase 5 — False-positive control ⚠️ NEW, NOT IN THE PAPER (4 days)
-The paper never faces this because optical imagery makes ships obvious. SAR does not.
-Wind streaks, offshore platforms, wind farms, wave breaking and **azimuth ambiguities**
-(SAR "ghost" copies offset along-track) all produce bright targets with no AIS — so
-they become false "dark ships" *by construction*. Untreated, this destroys the result.
+### Phase 6 — Dark logic + GFW reference layer + fusion (5 days)
+`src/dark_sts.py`: paper §3 verbatim — STS box → 500 m buffer → distinct MMSIs in AIS
+±12 h → `<2` = candidate. Then `src/gfw_ref.py`: per candidate, query **GFW SAR presence,
+`matched` flag, presence grid, GAP, encounters** via `gfw-api-python-client`. Then
+`src/fusion.py` implementing the `RESEARCH_POSITION.md` §4 matrix → outcome label.
+- Smoke test: `tests/test_fusion.py` synthetic cases — (a) 2 AIS IDs → AIS-visible;
+  (b) 0 IDs + GFW SAR unmatched + GAP → strong dark candidate; (c) 1 ID → partially
+  visible; (d) 0 IDs + GFW matched → possible timing error.
+- **Kill criterion:** zero dark candidates across the whole study period is a valid but thin
+  finding — extend date range before concluding.
 
-`src/filters.py`: land/coastline mask (OSM or GSHHG), static-infrastructure mask (a
-target appearing at the same coordinate in >50% of scenes is a platform or wind
-turbine, not a ship — this is a cheap and very effective filter), and a length
-plausibility gate (reject <30 m or >400 m).
+### Phase 7 — Registry enrichment + suspicion scoring (2 days)
+`src/enrich.py`: for any AIS-matched or GFW-referenced vessel, pull **GFW Vessel API**
+identity (type, flag, length, OFAC lists). `src/score.py` — three terms ONLY:
+- AIS gap duration around the event (from AIS, not imagery)
+- proximity to sanctioned-linked port/zone (small hand-built GeoJSON; OFAC/EU lists)
+- distance from normal shipping lanes (lane density from your own AIS)
 
-- Smoke test: hand-inspect **100 random detections**, count true ships, report precision before and after filtering. This number goes in your paper.
-- **Kill criterion:** post-filter precision below 0.5 means the dark-ship counts are noise; fix before proceeding.
+Drop the time-of-day term (Sentinel-1 is sun-synchronous — zero information). Optional and
+cheap: capacity estimation from box diagonal (paper §4 future work). This feeds the
+size-bins for disagreement analysis in Phase 8.
 
-### Phase 6 — Dark STS cross-check + independent validation (4 days)
-`src/dark_sts.py`: paper §3 verbatim — for each detected `sts` box, buffer 500 m,
-count distinct MMSIs in AIS within **±12 h**; `< 2` = dark STS. Then
-`src/validate_gfw.py`: for each dark event, query GFW `gaps` and `encounters` for the
-same area/time and report the agreement rate.
+### Phase 8 — Cross-region generalization (4 days)
+`src/generalize.py`: run the trained detector on **Hormuz / Malacca / Kerch** scenes. No
+training. Validate using GFW presence grids + SAR reference. Build the **size-binned
+disagreement table** (your YOLO vs GFW SAR: <30 m … >250 m). Use the mandatory caveat
+sentence from `RESEARCH_POSITION.md` §6 in any write-up.
+- Smoke test: table renders for ≥1 region; disagreements hand-inspected on 25 detections.
+- **Kill criterion:** model emits nonsense detections (e.g., <10% look like vessels) in
+  every region → keep generalization section but report failure honestly.
 
-- Smoke test: `tests/test_dark_sts.py` with synthetic cases — (a) two AIS identities present → not dark, (b) zero → dark, (c) exactly one → dark (the half-dark case), (d) two identities but 20 h away → dark.
-- **Kill criterion:** zero dark events across your whole study period is a *valid* finding but a thin paper — if it happens, extend the date range before concluding.
+### Phase 9 — Dashboard + write-up (1 week)
+`src/dashboard.py` (or Next.js app per `FRONTEND_PLAN.md`) — colour by fusion outcome
+(AIS-visible / partially-visible / dark candidate), popups with SAR chip, AIS identities
+found, GFW agreement, registry info, score breakdown. `src/run_pipeline.py` chains 1→8.
 
-### Phase 7 — Suspicion scoring (2 days)
-`src/score.py`. Three terms only:
-- AIS gap duration around the event (from AIS, not from imagery)
-- proximity to a sanctioned-linked port/zone (small hand-built GeoJSON; OFAC/EU lists)
-- distance from normal shipping lanes (build the lane density surface from your own DMA AIS — free, and better than any external lane dataset)
-
-**Drop the time-of-day term** from bible §6. Sentinel-1 is sun-synchronous: every
-detection is at one of two local times. It carries zero information.
-
-Optional and cheap: capacity estimation from box diagonal (paper §4 future work).
-
-- Smoke test: `tests/test_score.py` — an event that is long-dark, near a sanctioned port, off-lane scores high; a brief mid-lane one scores low.
-
-### Phase 8 — Dashboard and write-up (1 week)
-`src/dashboard.py` → Folium HTML, colour by score, popups with the SAR chip, AIS
-identities found, GFW agreement, and score breakdown. Then `src/run_pipeline.py`
-chaining 2→7 for one date range.
-
-Write-up compares to the paper on: coverage % (yours vs their 55%), detection counts,
-precision, cost, and GFW agreement rate.
+Write-up compares to the paper on: coverage % (yours vs ~55%), detection counts, precision,
+cost, GFW agreement rate, and the fusion matrix as the methods contribution.
 
 ---
 
@@ -225,27 +261,42 @@ precision, cost, and GFW agreement rate.
 
 | Week | Phase |
 |---|---|
-| 1 | 0 + 1 — registrations, AIS ingest, AIS STS extraction |
-| 2 | 2 + start 3 — imagery, begin auto-labeling |
-| 3 | 3 — auto-labeling, visual verification (the crux week) |
+| 1 | **0 — prove/kill the STS data (THE gate)** |
+| 2 | 1 + 2 — AIS STS extraction + imagery |
+| 3 | 3 — auto-labeling + visual verification (crux) |
 | 4 | 4 — training |
-| 5 | 5 — false-positive control, precision measurement |
-| 6 | 6 — dark STS logic + GFW validation |
-| 7 | 7 + 8 — scoring, dashboard |
-| 8 | Buffer, write-up, slides |
+| 5 | 5 — false-positive control, precision |
+| 6 | 6 — dark logic + GFW reference + fusion |
+| 7 | 7 + 8 — enrichment/scoring + generalization |
+| 8 | 9 — dashboard, write-up, buffer |
 
 ## Dependencies
 
-`rasterio geopandas shapely ultralytics requests folium geopy pandas numpy scipy pytest python-dotenv`
+`rasterio geopandas shapely ultralytics requests folium geopy pandas numpy scipy pytest
+python-dotenv gfw-api-python-client`
 
-No SNAP. No `sentinelsat` (dead hub). No SAM unless thresholding fails. No xView3.
+No SNAP. No `sentinelsat`. No SAM unless thresholding fails. No xView3.
+
+## Reference repos (study, don't clone-and-claim)
+
+- `allenai/sar_vessel_detect` — xView3 radar detector: preprocessing, tiling, training,
+  inference, length estimation.
+- `gSulpizio/sat_tracker` — SAR+AIS dark-vessel demo with human-in-the-loop dashboard:
+  borrow the architecture, not the code.
+- `GlobalFishingWatch/gfw-api-python-client` — official Python client; use it instead of
+  hand-rolling GFW HTTP calls.
 
 ## Cost
 
-₹0. Sentinel Hub free tier, DMA AIS free, GFW research API free, Colab free tier.
+₹0 core. Optional Colab Pro (~₹950/month) if training is slow. **Do not spend the ₹5000
+until Phase 0 passes.** GFW API use is free for non-commercial research; attribute GFW in
+the paper.
 
 ## Sources
 - Base paper: https://arxiv.org/abs/2404.07607
-- DMA AIS download: https://www.dma.dk/safety-at-sea/navigational-information/download-data
+- DMA AIS: https://www.dma.dk/safety-at-sea/navigational-information/download-data
+- HELCOM AIS: https://helcom.fi/baltic-sea-trends/data-maps/
 - GFW API docs: https://api-doc.globalfishingwatch.org/
+- GFW SAR presence dataset (4Wings): https://globalfishingwatch.org/our-apis/documentation/docs/v3/4wings
 - CDSE: https://dataspace.copernicus.eu/
+- MarineCadastre (stretch): https://hub.marinecadastre.gov/pages/vesseltraffic

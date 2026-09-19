@@ -2,6 +2,15 @@
 .env
 __pycache__/
 *.pyc
+.venv/
 data/
+outputs/
+models/*.pt
+*.tif
+*.tiff
+*.jpeg
+*.jpg
+*.zip
 node_modules/
 .next/
+runs/

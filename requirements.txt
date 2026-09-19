@@ -1,0 +1,15 @@
+pandas
+numpy
+scipy
+requests
+python-dotenv
+pytest
+rasterio
+geopandas
+shapely
+geopy
+folium
+ultralytics
+gfw-api-python-client
+fastapi
+uvicorn

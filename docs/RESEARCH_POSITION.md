@@ -80,6 +80,41 @@ Consequences: `AIS identity absent`, `GFW SAR unmatched`, and `GAP event present
 *supporting* evidence for AIS-unmatched status. `GFW presence absent` is *weak /
 non-informative* and is never added to a darkness confidence score.
 
+#### 4.2.1 Measured evidence for the absence rule (2026-09-20)
+
+Queried the GFW v3 events API for calendar year 2024 across our regions plus one
+control, via `src/gfw.py`:
+
+| Region                    | GFW gaps | GFW encounters |
+| ------------------------- | -------: | -------------: |
+| Skagerrak (training AOI)  |    **0** |             10 |
+| Hormuz (test)             |        1 |            150 |
+| Malacca (test)            |        4 |          2,326 |
+| Kerch (test)              |        0 |              2 |
+| Gulf of Guinea (control)  |      253 |             18 |
+
+The query shape is verified: the same call returns 253 gaps in the Gulf of Guinea,
+so zero in the Skagerrak is a property of the region, not a bug.
+
+Gaps are abundant **only** in the control region, which has patchy AIS reception.
+GFW's gap detection requires a disappearance that cannot be attributed to receiver
+coverage, so gaps are structurally rare exactly where coastal reception is good —
+Danish, Swedish and Norwegian waters included. This is §4.2's absence rule observed
+in data rather than asserted, and the paper should present it as such.
+
+Two consequences, both binding:
+
+1. **`GFW GAP?` is not load-bearing anywhere in our scope.** It will be false for
+   almost every candidate event in every region we work in. Treat a gap as a bonus
+   when present; never let its absence move a score.
+2. **`GFW encounter?` carries the comparison weight instead.** GFW encounters are
+   that project's own ship-to-ship rendezvous detections, so they are the layer
+   that actually shares our unit of analysis.
+
+The Phase 0 kill criterion was therefore amended to test encounters rather than
+gaps. Gaps play no role in the training region regardless: Skagerrak labels come
+from DMA raw AIS, and GFW is a reference layer for the test regions only.
+
 ### 4.3 Outcome categories (characterization, not verdicts)
 
 1. **AIS-visible STS** — ≥2 distinct AIS identities in the spatial/temporal window.

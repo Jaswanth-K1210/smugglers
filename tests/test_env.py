@@ -54,18 +54,24 @@ def main(date: str):
     print(f"AIS rows in AOI on {date}: {len(df):,}   distinct MMSI: {df.mmsi.nunique():,}")
     print(df.head().to_string(), "\n")
 
-    total, entries = gfw.events("gaps", "2025-01-01", "2025-12-31", limit=5)
-    print(f"GFW gap events in AOI over 2025: {total}")
+    # Encounters, not gaps. GFW gap events are structurally near-zero wherever
+    # coastal AIS reception is good, which includes every region we train in —
+    # see the coverage table in docs/RESEARCH_POSITION.md. Encounters are GFW's
+    # own ship-to-ship rendezvous detections, so they match our unit of analysis.
+    encounters, entries = gfw.events("encounters", "2024-01-01", "2024-12-31", limit=5)
+    gaps, _ = gfw.events("gaps", "2024-01-01", "2024-12-31", limit=1)
+    print(f"GFW encounters in AOI over 2024: {encounters}   (gaps, for reference: {gaps})")
     for e in entries:
-        print(f"  {e.get('start')}  {e.get('id')}")
+        print(f"  {e.get('start')}  {(e.get('vessel') or {}).get('name')}")
 
+    vessels = df.mmsi.nunique()
     print("\n--- KILL CRITERION ---")
-    if df.mmsi.nunique() == 0:
+    if vessels == 0:
         print("FAIL: zero vessels in the box. Pick a new bounding box.")
-    elif total == 0:
-        print("FAIL: zero GFW gap events for the region over a year. Pick a new bounding box.")
+    elif encounters == 0:
+        print("FAIL: zero GFW encounters for the region over a year. Pick a new bounding box.")
     else:
-        print(f"PASS: {df.mmsi.nunique():,} vessels/day and {total} GFW gaps/year in the AOI.")
+        print(f"PASS: {vessels:,} vessels/day and {encounters} GFW encounters/year in the AOI.")
 
 
 if __name__ == "__main__":

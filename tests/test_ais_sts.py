@@ -91,47 +91,41 @@ def test_moving_vessels_are_not_an_event(monkeypatch):
     assert len(ev) == 0
 
 
-def test_moored_pair_is_excluded(monkeypatch):
-    # Two boats alongside a quay satisfy the raw rule and are not a transfer.
-    ev = _run_rule([
+def test_moored_pair_reported_under_the_raw_rule(monkeypatch):
+    # Two boats alongside a quay satisfy the rule, so the rule reports them.
+    tracks = lambda: [
         _track(1, 57.7, 10.6, "2025-06-08 02:00", 120, nav="Moored"),
         _track(2, 57.7, 10.6 + NEAR, "2025-06-08 02:00", 120, nav="Moored"),
-    ], monkeypatch)
-    assert len(ev) == 0
-    # ...but only because we asked for it.
-    assert len(_run_rule([
-        _track(1, 57.7, 10.6, "2025-06-08 02:00", 120, nav="Moored"),
-        _track(2, 57.7, 10.6 + NEAR, "2025-06-08 02:00", 120, nav="Moored"),
-    ], monkeypatch, exclude_moored=False)) == 1
+    ]
+    assert len(_run_rule(tracks(), monkeypatch)) == 1
+    # The optional exclusion removes them when asked for.
+    assert len(_run_rule(tracks(), monkeypatch, exclude_moored=True)) == 0
 
 
-def test_berth_length_contact_is_capped(monkeypatch):
-    # 20 hours alongside is a berth, not a transfer.
-    ev = _run_rule([
+def test_long_berth_reported_under_the_raw_rule(monkeypatch):
+    # 20 hours alongside still satisfies 500m / 1h / 1kn.
+    tracks = lambda: [
         _track(1, 57.7, 10.6, "2025-06-08 00:00", 1200),
         _track(2, 57.7, 10.6 + NEAR, "2025-06-08 00:00", 1200),
-    ], monkeypatch)
-    assert len(ev) == 0
-    # The raw rule, without the cap, does report it.
-    assert len(_run_rule([
-        _track(1, 57.7, 10.6, "2025-06-08 00:00", 1200),
-        _track(2, 57.7, 10.6 + NEAR, "2025-06-08 00:00", 1200),
-    ], monkeypatch, max_minutes=None)) == 1
+    ]
+    assert len(_run_rule(tracks(), monkeypatch)) == 1
+    assert len(_run_rule(tracks(), monkeypatch, max_minutes=720)) == 0
 
 
-def test_vessels_too_small_for_sar_are_excluded(monkeypatch):
-    small = [
+def test_small_vessels_reported_under_the_raw_rule(monkeypatch):
+    tracks = lambda: [
         _track(1, 57.7, 10.6, "2025-06-08 02:00", 120).assign(length=9.0),
         _track(2, 57.7, 10.6 + NEAR, "2025-06-08 02:00", 120).assign(length=12.0),
     ]
-    assert len(_run_rule(small, monkeypatch)) == 0
-    assert len(_run_rule(small, monkeypatch, min_length_m=0)) == 1
+    assert len(_run_rule(tracks(), monkeypatch)) == 1
+    assert len(_run_rule(tracks(), monkeypatch, min_length_m=30)) == 0
 
 
-def test_unreported_length_is_excluded_not_assumed(monkeypatch):
-    # Class B craft leave length blank; blank must not pass the gate.
-    blank = [
+def test_length_gate_rejects_unreported_length(monkeypatch):
+    # Class B craft leave length blank; blank must fail the gate, not pass it.
+    tracks = lambda: [
         _track(1, 57.7, 10.6, "2025-06-08 02:00", 120).assign(length=float("nan")),
         _track(2, 57.7, 10.6 + NEAR, "2025-06-08 02:00", 120).assign(length=float("nan")),
     ]
-    assert len(_run_rule(blank, monkeypatch)) == 0
+    assert len(_run_rule(tracks(), monkeypatch)) == 1
+    assert len(_run_rule(tracks(), monkeypatch, min_length_m=30)) == 0

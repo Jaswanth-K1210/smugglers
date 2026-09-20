@@ -27,10 +27,11 @@ from src.config import DATA
 OUT = DATA / "labels"
 METRIC_CRS = "EPSG:32632"  # same UTM zone the SAR tiles land in, see fetch_s1
 
-# ponytail: what survives the filters is still roughly half Frederikshavn
-# harbour — trawlers shuffling between berths. The honest fix is distance from
-# shore, and Phase 5 already has to build a land/coastline mask for the SAR
-# detections. Reuse that mask here rather than growing a second one.
+# ponytail: output is dominated by harbours — berthed boats satisfy the rule
+# perfectly, and Hirtshals plus Frederikshavn alone account for well over half
+# of one day's events. The honest fix is distance from shore, and Phase 5
+# already has to build a land/coastline mask for the SAR detections. Reuse that
+# mask here rather than growing a second one.
 
 
 def _runs(bins, max_gap: int = 1):
@@ -74,22 +75,24 @@ def _binned(df, bin_minutes, max_sog, exclude_moored):
 
 
 def sts_events(dates, box=None, radius_m: float = 500, min_minutes: float = 60,
-               max_sog: float = 1.0, bin_minutes: int = 5, exclude_moored: bool = True,
-               max_minutes: float = 720, min_length_m: float = 30):
+               max_sog: float = 1.0, bin_minutes: int = 5, exclude_moored: bool = False,
+               max_minutes: float = None, min_length_m: float = 0):
     """STS events over the given dates (list of YYYY-MM-DD). Returns a DataFrame.
 
-    `radius_m` / `min_minutes` / `max_sog` are the specified rule. The other two
-    are exclusions, not changes to it, and both are needed before the output is
-    usable as training labels. Set `max_minutes=None, min_length_m=0` for the
-    raw rule.
+    Defaults are the specified rule and nothing else: within `radius_m`, for at
+    least `min_minutes`, both under `max_sog`. Three optional exclusions are
+    available but off, because the rule is the rule:
 
-    `max_minutes` — a berth is permanent, a transfer is bounded. Unfiltered, one
-    day of the AOI yields 6857 "events", of which 1183 run the entire 24 hours
-    and cluster on Hirtshals and Frederikshavn harbours.
+    `exclude_moored`  — drop pairs reporting AIS navigational status "Moored".
+    `max_minutes`     — drop contacts longer than this; a berth is permanent,
+                        a transfer is bounded.
+    `min_length_m`    — drop pairs where either vessel is shorter than this.
+                        30 m matches the gate Phase 5 applies to SAR detections;
+                        below it a vessel is a pixel or two at 10 m resolution.
 
-    `min_length_m` — the same 30 m threshold Phase 5 applies to SAR detections.
-    At 10 m resolution a 9 m fishing boat is one pixel, so a label on one would
-    teach the detector to find something it cannot resolve.
+    For scale, one day of the AOI under the bare rule yields 6857 events, 1183
+    of them spanning the full 24 hours and clustering on Hirtshals and
+    Frederikshavn harbours. All three exclusions together leave 54.
     """
     frames = [_binned(ais.load(d, box=box), bin_minutes, max_sog, exclude_moored) for d in dates]
     binned = pd.concat(frames, ignore_index=True)

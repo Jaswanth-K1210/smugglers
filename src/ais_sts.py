@@ -104,19 +104,27 @@ def sts_events(dates, box=None, radius_m: float = 500, min_minutes: float = 60,
     for bin_time, grp in binned.groupby("bin", sort=True):
         if len(grp) < 2:
             continue
-        mmsi = grp.mmsi.to_numpy()
-        tree = cKDTree(_to_metres(grp.lon.to_numpy(), grp.lat.to_numpy()))
+        mmsi, lat, lon = grp.mmsi.to_numpy(), grp.lat.to_numpy(), grp.lon.to_numpy()
+        tree = cKDTree(_to_metres(lon, lat))
         for i, j in tree.query_pairs(radius_m):
-            contacts.setdefault((min(mmsi[i], mmsi[j]), max(mmsi[i], mmsi[j])), []).append(bin_time)
+            key = (min(mmsi[i], mmsi[j]), max(mmsi[i], mmsi[j]))
+            # Keep the midpoint between the two vessels, which is where the
+            # contact actually is. Recovering it later by re-scanning every
+            # binned row per event is both slower and less accurate — it would
+            # average in positions from times the pair was not in contact.
+            contacts.setdefault(key, []).append(
+                (bin_time, (lat[i] + lat[j]) / 2, (lon[i] + lon[j]) / 2))
 
     step = pd.Timedelta(minutes=bin_minutes)
     info = binned.drop_duplicates("mmsi").set_index("mmsi")
     events = []
-    for (a, b), times in contacts.items():
+    for (a, b), obs in contacts.items():
+        obs.sort(key=lambda o: o[0])
         # DatetimeIndex, not np.array: the latter gives an object array of
         # Timestamps, which will not do arithmetic against a Timestamp.
-        times = pd.DatetimeIndex(sorted(set(times)))
+        times = pd.DatetimeIndex([o[0] for o in obs])
         idx = ((times - times[0]) // step).to_numpy()
+        mids = np.array([(o[1], o[2]) for o in obs])
         for first, last, n in _runs(idx):
             start, end = times[0] + first * step, times[0] + last * step
             minutes = (end - start) / pd.Timedelta(minutes=1)
@@ -126,14 +134,14 @@ def sts_events(dates, box=None, radius_m: float = 500, min_minutes: float = 60,
                 info.length.get(a, 0) >= min_length_m and info.length.get(b, 0) >= min_length_m
             ):
                 continue
-            here = binned[(binned.mmsi.isin([a, b])) & binned.bin.between(start, end)]
+            lat, lon = np.median(mids[(idx >= first) & (idx <= last)], axis=0)
             events.append({
                 "start": start, "end": end, "duration_min": round(minutes, 1),
                 "mmsi_a": a, "mmsi_b": b,
                 "name_a": info.name.get(a), "name_b": info.name.get(b),
                 "type_a": info.ship_type.get(a), "type_b": info.ship_type.get(b),
                 "length_a": info.length.get(a), "length_b": info.length.get(b),
-                "lat": round(here.lat.median(), 5), "lon": round(here.lon.median(), 5),
+                "lat": round(float(lat), 5), "lon": round(float(lon), 5),
                 "n_bins": n,
             })
     out = pd.DataFrame(events)

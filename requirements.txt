@@ -8,6 +8,7 @@ rasterio
 geopandas
 shapely
 geopy
+global-land-mask
 folium
 ultralytics
 gfw-api-python-client

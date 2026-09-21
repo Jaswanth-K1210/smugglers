@@ -33,7 +33,7 @@ The unit of analysis is the **event**, not the vessel. The contribution is a
 | Stretch training region        | US (MarineCadastre) — only if Denmark/Baltic pipeline is solid    |
 | Test/generalization regions    | Hormuz, Malacca, Kerch — use trained model, **no separate training** |
 | SAR                            | Sentinel-1 IW GRD via Microsoft Planetary Computer STAC — **no account**. See §3.1 |
-| Detector                       | YOLOv8, classes `vessel` + `sts` only                             |
+| Detector                       | Ultralytics one-stage, classes `vessel` + `sts` only. Family chosen by benchmark, see §3.2 |
 | Vessel type/flag/length        | Registry/GFW enrichment on AIS matches — **never visual CNN classification** |
 | GFW datasets                   | Reference/comparison layers only (SAR presence, presence grid, GAPs, encounters) |
 | GFW role                       | Cross-system comparison. **Never ground truth.**                  |
@@ -78,6 +78,26 @@ Two consequences, both deliberate:
 This strengthens rather than weakens the open-data claim: the pipeline now needs
 **no registration of any kind** for imagery. Fallback if PC ever becomes
 unavailable: ASF (`asf_search`, free NASA Earthdata login), verified reachable.
+
+### 3.2 Detector family: benchmarked, not asserted (2026-09-20)
+
+The plan named YOLOv8. Nothing in the pipeline depends on that choice —
+`src/train.py` takes `--model`, and every Ultralytics family shares one API, so
+swapping is a string. Rather than declare a winner, `--benchmark` trains several
+families on the **same split, same schedule, same data** and writes
+`models/benchmark.csv`. The only variable is the backbone, so the numbers are
+comparable and the paper reports a table instead of an assertion.
+
+Default candidates: `yolov8n`, `yolo11n`, `yolo12n`. `--available` reports which
+families the installed Ultralytics build can actually construct, since that
+roster moves with the package version and training happens on Colab, not here.
+
+**Architecture is not currently the binding constraint.** Measured on the Skagen
+scene, vessel boxes run 19–33 px for 190–330 m ships, and the 30 m floor of the
+length gate is 3 px — so small-object performance is the real limit. In order of
+expected effect: more labelled scenes, then `imgsz`, then tile size, then model
+family. A benchmark over 20 tiles from one scene would measure noise; run it once
+`label_many()` has produced tens of scenes.
 
 ---
 

@@ -79,3 +79,62 @@ if __name__ == "__main__":
     }
     for name, (la, lo) in spots.items():
         print(f"{name:24} is_land={bool(is_land(la, lo))!s:6} at_sea(1km)={bool(at_sea(la, lo)[0])}")
+
+
+# --- Phase 5: detection-side false-positive control ------------------------
+# SAR produces bright targets that are not ships. The base paper's optical
+# imagery never had to deal with wind turbines, platforms or azimuth
+# ambiguities; we do.
+
+def length_gate(detections, min_m: float = 30, max_m: float = 400, col: str = "length_m"):
+    """Drop detections outside a plausible vessel length.
+
+    Below 30 m a target is a pixel or three at 10 m and cannot be told from a
+    bright scatterer; above 400 m it is longer than any ship afloat and is
+    almost always a merged cluster or a platform.
+    """
+    if detections.empty:
+        return detections
+    L = detections[col]
+    return detections[L.between(min_m, max_m)].reset_index(drop=True)
+
+
+def infrastructure_mask(detections, cell_m: float = 200, min_scene_frac: float = 0.5,
+                        scene_col: str = "scene"):
+    """Flag positions that recur across scenes — turbines, platforms, moorings.
+
+    A ship is somewhere else next week. Something bright at the same coordinates
+    in more than `min_scene_frac` of scenes is fixed to the seabed. Returns the
+    frame with an `is_infrastructure` column added.
+    """
+    if detections.empty:
+        return detections.assign(is_infrastructure=[])
+    d = detections.copy()
+    n_scenes = d[scene_col].nunique()
+    d["_cell"] = (
+        (d.x.to_numpy() // cell_m).astype(int).astype(str) + "_"
+        + (d.y.to_numpy() // cell_m).astype(int).astype(str)
+    )
+    seen = d.groupby("_cell")[scene_col].nunique()
+    # With one scene every cell is trivially in "100%" of scenes, which would
+    # flag every ship. Needs at least two scenes to mean anything.
+    fixed = set() if n_scenes < 2 else set(seen[seen / n_scenes > min_scene_frac].index)
+    d["is_infrastructure"] = d._cell.isin(fixed)
+    return d.drop(columns="_cell")
+
+
+def clean_detections(detections, min_m: float = 30, max_m: float = 400,
+                     min_km: float = 1.0, drop_infrastructure: bool = True):
+    """The full Phase 5 chain: length gate, land mask, static-infrastructure mask."""
+    if detections.empty:
+        return detections
+    d = length_gate(detections, min_m, max_m)
+    if d.empty:
+        return d
+    d = d[at_sea(d.lat.to_numpy(), d.lon.to_numpy(), min_km)].reset_index(drop=True)
+    if d.empty:
+        return d
+    d = infrastructure_mask(d)
+    if drop_infrastructure:
+        d = d[~d.is_infrastructure].reset_index(drop=True)
+    return d

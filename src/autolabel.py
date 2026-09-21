@@ -290,3 +290,52 @@ if __name__ == "__main__":
     boxes.to_csv(LABELS / f"{Path(tif).stem}_boxes.csv", index=False)
     preview_boxes(tif, boxes)
     print(f"tiles written: {tile_scene(tif, boxes)}")
+
+
+def label_many(start: str, end: str, box=None, min_overlap: float = 0.05,
+               max_scenes: int = None, tile_size: int = 1024):
+    """Fetch, label and tile every Sentinel-1 scene over the AOI in a date range.
+
+    This is the Colab entry point. AIS is the expensive part — one ~650 MB day
+    per date — so scenes are grouped by date and each day is loaded once.
+    """
+    from src import fetch_s1
+
+    items = [it for it in fetch_s1.search(start, end, box=box)
+             if fetch_s1.overlap(it, box) >= min_overlap]
+    items.sort(key=lambda it: fetch_s1.overlap(it, box), reverse=True)
+    if max_scenes:
+        items = items[:max_scenes]
+    # Group by day so each AIS day is read once, not once per scene.
+    items.sort(key=lambda it: it["properties"]["datetime"])
+    print(f"{len(items)} scenes with >={min_overlap:.0%} AOI overlap, {start}..{end}")
+
+    ev_path = LABELS / "sts_events_7d_at_sea.csv"
+    events = pd.read_csv(ev_path, parse_dates=["start", "end"]) if ev_path.exists() else None
+
+    summary, total_tiles = [], 0
+    for n, it in enumerate(items, 1):
+        try:
+            tif = fetch_s1.fetch(it, box=box)
+            boxes = label_scene(tif, events, box=box)
+            if boxes.empty:
+                print(f"[{n}/{len(items)}] {it['id'][:40]} — no labels")
+                continue
+            tiles = tile_scene(tif, boxes, size=tile_size)
+            total_tiles += tiles
+            counts = boxes.cls.value_counts().to_dict()
+            summary.append({"scene": Path(tif).stem, "time": it["properties"]["datetime"],
+                            "vessel": counts.get("vessel", 0), "sts": counts.get("sts", 0),
+                            "tiles": tiles})
+            print(f"[{n}/{len(items)}] {Path(tif).stem[:44]}  "
+                  f"vessel={counts.get('vessel', 0):>3} sts={counts.get('sts', 0):>2} tiles={tiles}")
+        except Exception as e:                         # one bad scene must not end the batch
+            print(f"[{n}/{len(items)}] {it['id'][:40]} FAILED {type(e).__name__}: {e}")
+
+    df = pd.DataFrame(summary)
+    if len(df):
+        LABELS.mkdir(parents=True, exist_ok=True)
+        df.to_csv(LABELS / "label_batch_summary.csv", index=False)
+        print(f"\n{len(df)} scenes labelled, {df.vessel.sum()} vessel + {df.sts.sum()} sts "
+              f"boxes, {total_tiles} tiles")
+    return df

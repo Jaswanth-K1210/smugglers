@@ -39,6 +39,7 @@ from src.filters import at_sea
 TILES = DATA / "tiles"
 LABELS = DATA / "labels"
 CLASSES = {"vessel": 0, "sts": 1}
+CLASSES_INV = {v: k for k, v in CLASSES.items()}
 
 # A vessel is at most ~400 m; search a window comfortably larger than that so a
 # slightly stale AIS fix still lands inside it, but small enough that the local

@@ -14,3 +14,7 @@ models/*.pt
 node_modules/
 .next/
 runs/
+
+# Phase 9 deployment results are committed deliberately (see webapp/Dockerfile)
+!outputs/events.geojson
+!outputs/events.csv

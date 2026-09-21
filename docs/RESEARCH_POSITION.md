@@ -43,41 +43,23 @@ The unit of analysis is the **event**, not the vessel. The contribution is a
 | Budget                         | **₹0 until feasibility proven** (first 7 days)                  |
 | License/citation requirement   | GFW APIs are non-commercial; attribute GFW in the paper           |
 
-### 3.1 SAR source: why not CDSE (2026-09-20)
+### 3.1 SAR source
 
-The plan specified the Copernicus Data Space Ecosystem's Sentinel Hub Process API.
-That route is unavailable to us:
+Sentinel-1 GRD is accessed through **Microsoft Planetary Computer**, because the
+originally planned CDSE Sentinel Hub route was unavailable throughout the
+acquisition period. Both serve the same ESA archive; PC requires no account.
 
-- `sh.dataspace.copernicus.eu/oauth/token` has returned **503 "No server is
-  available"** on every probe since 2026-09-18, for GET and POST alike. The
-  commercial `services.sentinel-hub.com` equivalent returns a correct 405 to the
-  same request, so the fault is CDSE-side, not ours.
-- Account registration does not complete — the form submits and no confirmation
-  mail arrives. Even on success, the token endpoint above still issues nothing.
+Two consequences carry into the method and are treated as experimental variables,
+not assumptions — see §3.4:
 
-**Replacement: Microsoft Planetary Computer**, `sentinel-1-grd` collection. This is
-the same ESA Sentinel-1 archive mirrored into Azure. Verified end to end with no
-`Authorization` header on any request: STAC search 200, SAS signing 200, raster
-byte read 206. The collection carries no `msft:requires_account` flag, unlike
-their `sentinel-1-rtc` collection, which does and is therefore not used.
+1. **We geocode ourselves.** PC serves GRD in radar geometry with a ~210-point GCP
+   grid. `rasterio.vrt.WarpedVRT` consumes those directly, so this is one call and
+   not a SNAP chain. Output is UTM 32N at 10 m, so pixels are square metres and the
+   length gate and spatial buffers work in metres.
+2. **We work in raw DN**, not calibrated sigma-nought.
 
-Two consequences, both deliberate:
-
-1. **We geocode ourselves.** PC serves GRD measurement images in radar geometry
-   with a ~210-point GCP grid, not map-projected. GDAL picks the GCPs up through
-   `rasterio.vrt.WarpedVRT`, so this is one call, not a SNAP processing chain —
-   the "no SNAP" constraint holds. Output is **UTM 32N at 10 m**, chosen over
-   EPSG:4326 so pixels are square metres: the Phase 5 length gate and the Phase 6
-   500 m buffer then work directly in metres.
-2. **We use raw DN, not calibrated sigma-nought.** Labelling is adaptive
-   brightness thresholding, which needs relative contrast; ships sit 10-30 dB
-   above water in uncalibrated DN just as they do after calibration. Absolute
-   radiometry is never required, so the earlier "pre-calibrated" wording in the
-   plan and the slides is obsolete.
-
-This strengthens rather than weakens the open-data claim: the pipeline now needs
-**no registration of any kind** for imagery. Fallback if PC ever becomes
-unavailable: ASF (`asf_search`, free NASA Earthdata login), verified reachable.
+Full operational record, including the evidence CDSE was unusable, in
+`docs/DATA_SOURCE_DECISIONS.md`.
 
 ### 3.2 Detector family: benchmarked, not asserted (2026-09-20)
 
@@ -98,6 +80,81 @@ length gate is 3 px — so small-object performance is the real limit. In order 
 expected effect: more labelled scenes, then `imgsz`, then tile size, then model
 family. A benchmark over 20 tiles from one scene would measure noise; run it once
 `label_many()` has produced tens of scenes.
+
+### 3.3 Evidence hierarchy
+
+The contribution is multi-source fusion, not a GFW comparison. Sources rank:
+
+```
+PRIMARY     Sentinel-1 SAR  +  raw AIS          our own observation and identity evidence
+SECONDARY   GFW-derived SAR / AIS products      one external evidence source among several
+TERTIARY    registry / vessel metadata          attributes once identity exists
+```
+
+GFW is a derived product of somebody else's pipeline. It is weighted as one
+secondary source and never as an arbiter. Any wording that positions this as "a
+GFW comparison paper" misstates the contribution.
+
+### 3.4 SAR preprocessing and polarisation as experiments, not assumptions
+
+§3.1 records two processing choices. Neither is asserted; both are measured
+against downstream detection performance, because a choice defended only by
+argument is a choice a reviewer can attack.
+
+**Radiometry.** Compare on the same scenes, same split:
+
+| Arm | Input |
+| --- | ----- |
+| A | raw DN (current default) |
+| B | log-scaled DN |
+| C | calibrated sigma-nought |
+| D | normalised backscatter |
+
+Reported question: *does radiometric calibration materially affect vessel
+detection under this pipeline?* Prior expectation is "little", because labelling
+uses adaptive thresholding on relative contrast and Skagen boxes measured ≥20 dB
+over local background — but a prior expectation is not a result.
+
+**Polarisation.** Sentinel-1 IW over the AOI is dual-pol, so VV, VH and VV+VH are
+all available at no extra acquisition cost. Compare all three. Even if VV-only
+wins, the paper reports *"VV-only provided the chosen accuracy/compute tradeoff"*
+rather than silently picking a channel.
+
+### 3.5 Leakage control — binding rules
+
+Adjacent SAR tiles overlap in sea state, wind streaks, incidence angle and often
+contain the same vessel minutes apart. A random tile split puts near-duplicates
+on both sides and reports a score the model has not earned. Enforced:
+
+```
+1. Splits are assigned by SCENE, never by tile.        (implemented: src/train.py)
+2. No Sentinel-1 acquisition appears in two splits, including
+   repeat slices of the same overpass.
+3. No tile adjacent to a validation tile enters training.
+4. No AIS from a test region is used in training or labelling.
+5. No GFW-derived product is ever used to train or tune the SAR detector —
+   GFW enters only at the fusion/comparison layer.
+6. Test regions stay sealed until detector and fusion hyperparameters are frozen.
+```
+
+Rule 6 is the one most easily broken by accident. Hormuz, Malacca and Kerch are
+not looked at, not tuned against, and not plotted until the training-region
+pipeline is final.
+
+### 3.6 Train / validation / test
+
+The earlier framing jumped from training straight to geographic generalisation,
+which leaves nowhere to tune. Three levels:
+
+```
+TRAIN        Denmark / Skagen + Baltic scenes
+VALIDATION   held-out Denmark / Baltic SCENES — all model selection,
+             all thresholds, all sensitivity analyses happen here
+TEST         Hormuz, Malacca, Kerch — touched once, after freeze
+```
+
+Geographic degradation between validation and test is a **reported result**, not
+something to be tuned away.
 
 ---
 
@@ -195,32 +252,152 @@ from DMA raw AIS, and GFW is a reference layer for the test regions only.
 The table above is a *starting illustration* — the final classifier is learned and
 evaluated (§4.4–4.5), not asserted.
 
+#### 4.3.1 Why `sts` is a detector class — measured, not assumed
+
+An STS transfer is a *relationship* between vessels, not an object, and this
+document says the unit of analysis is the event. So treating `sts` as an object
+class looks like a category error, and the obvious alternative is: detect vessels,
+then pair them by proximity and orientation.
+
+**That alternative fails on the physics, and we measured it.** In the Skagen scene
+of 2025-06-08, four rafted pairs each produced a *single* bright blob, with the
+two AIS identities resolving to byte-identical pixel boxes:
+
+| Vessel A | Vessel B | Detected as |
+| -------- | -------- | ----------- |
+| RINA (120 m) | CAUVERI (252 m) | one blob, 271 m |
+| ZIRCONE (124 m) | AK ANA (176 m) | one blob, 201 m |
+| AMAK SWAN (93 m) | TRANSOCEAN (160 m) | one blob, 191 m |
+| GAIA NORDIC (50 m) | FEED TRONDHEIM (100 m) | one blob, 100 m |
+
+At 10 m ground resolution, two hull-to-hull vessels are not separable. A
+pair-based approach has nothing to pair: there is one detection, not two, exactly
+in the configuration we care about.
+
+So the resolution is definitional, not architectural:
+
+> `sts` is a **candidate-event detector** over a vessel configuration that
+> Sentinel-1 renders as a single object. Its output is a candidate that enters the
+> fusion layer as evidence. It is never, by itself, an STS event, and never a
+> "dark" event.
+
+Both paths are kept and compared, because resolvability depends on separation:
+
+```
+SAR scene
+   ├── vessel detections ──┐
+   └── sts detections ─────┤
+                           ▼
+              STS CANDIDATE EVENTS
+    (merged-blob detections, plus pairs of
+     vessel detections within the spatial /
+     temporal rule where both ARE resolved)
+                           ▼
+              AIS · GFW · registry fusion
+```
+
+Reported as an ablation (§4.7): candidates from the `sts` class alone, from
+vessel-pairing alone, and from both. Separation, not preference, decides which
+recovers more real events.
+
 ### 4.4 Fusion evaluation experiment (the actual methods contribution)
 
-Build a **fusion-reference dataset** of **100–300 candidate STS events**. For each event
-record the full feature vector plus an independent human review label:
+Build a **fusion-reference dataset** of **100–300 candidate STS events**.
+
+#### 4.4.1 Review labels describe the imagery, not the conclusion
+
+The reference label answers only *"is this a ship-to-ship transfer?"* It must not
+encode darkness, because darkness is what the fusion model exists to estimate.
+Labelling events "probable dark" and then training a model to predict darkness is
+circular, and a reviewer will say so.
+
+**Review label — from imagery and context only:**
 
 ```
 0 = non-STS / false detection
 1 = probable STS
-2 = probable dark / partially-dark STS
-3 = high-confidence dark STS
+2 = confirmed / strong STS
 ```
 
-Call these **expert-reviewed reference labels** — never "ground truth."
+**Evidence state — computed independently, never shown to the reviewer:**
 
-Compare five methods on the same reference set:
+```
+AIS identity count (0 / 1 / 2+) · AIS gap duration · GFW SAR? ·
+GFW SAR matched? · GFW presence? · GFW GAP? · GFW encounter? · registry match?
+```
+
+Darkness is then an *output* of fusion over the evidence state, evaluated against
+the review label — never an input to it.
+
+#### 4.4.2 Annotation protocol
+
+"Expert-reviewed" on its own is not a method. Binding procedure:
+
+```
+Reviewer A ─┐
+            ├─► independent labels ─► agree? ─ yes ─► final label
+Reviewer B ─┘                           │
+                                        no ─► adjudication by a third
+                                               reviewer, recorded
+```
+
+- **Two independent reviewers** per event, working from a written guideline that
+  defines what makes a configuration a probable versus confirmed STS (hull-to-hull
+  contact, relative size, duration at low speed, anchorage context).
+- **Blinded** to the fusion model's prediction, to the AIS identity count, and to
+  every GFW field. Reviewers see imagery and basic context only.
+- **Disagreements adjudicated** by a third reviewer; adjudicated items flagged.
+- **Inter-annotator agreement reported** as Cohen's κ, with the confusion matrix
+  between reviewers.
+
+Because STS intent and the reason for AIS absence cannot be established from SAR
+imagery alone, expert review is treated as a **reference annotation, not absolute
+ground truth** — the labels carry the reviewers' uncertainty, and κ quantifies it.
+
+#### 4.4.3 Baseline ladder
+
+A progression, so "fusion helps" is demonstrated against something rather than
+asserted. Baseline 0 matters most: without it there is no evidence the classifier
+learned anything beyond the class prevalence.
 
 | # | Baseline / Method | Rule |
 | --- | ----------------- | ---- |
-| 1 | AIS-only | 0 identities → dark |
-| 2 | SAR-only | SAR STS box → dark candidate |
-| 3 | Simple AIS threshold | 0 / 1 / 2+ rule |
-| 4 | GFW-reference | matched/unmatched + GAP + encounter rule |
-| 5 | **Proposed multi-source fusion** | evidence-state classifier |
+| 0 | **Random / prevalence** | predict the majority class, or sample at the base rate |
+| 1 | AIS-only | identity count rule alone |
+| 2 | SAR-only | SAR STS candidate alone |
+| 3 | Rule-based fusion | the 0 / 1 / 2+ table of §4.3, hand-written |
+| 4 | Logistic regression | interpretable linear model over the evidence state |
+| 5 | Random forest / XGBoost | nonlinear reference |
+| 6 | **Proposed interpretable fusion** | the contribution |
 
-Report **precision, recall (where a reference exists), false-positive rate, and
-disagreement patterns between evidence sources** (e.g., "SAR says STS, GFW says nothing").
+#### 4.4.4 Metrics
+
+STS events are rare, so accuracy and ROC-AUC flatter a useless model. Report:
+
+| Metric | Why |
+| ------ | --- |
+| **PR-AUC** | the headline number — robust when positives are rare |
+| ROC-AUC | for comparability with other work |
+| Precision / recall / F1 | per class, at the operating threshold |
+| **Brier score** | are the probabilities honest, not just correctly ranked |
+| **Calibration curve** | predicted 0.7 should mean 0.7 in reality |
+| Confusion matrix | where the errors actually fall |
+| False-positive rate | operational cost of an alert |
+| Disagreement patterns | e.g. "SAR says STS, GFW says nothing" |
+
+Confidence intervals by bootstrap over events, since n is 100–300.
+
+#### 4.4.5 Model output is a distribution, not a verdict
+
+The fusion model emits probabilities, never a binary label:
+
+```
+P(non-STS)   P(STS, AIS-visible)   P(STS, AIS-partial)   P(STS, AIS-unmatched)
+```
+
+An operator sees a ranked, calibrated confidence. Nothing in the output asserts a
+vessel intentionally concealed itself — that is an inference about intent the data
+cannot support.
 
 > If fusion does not beat the simpler baselines, that is still a legitimate result:
 > *"Additional GFW-derived evidence did not provide measurable improvement over the
@@ -244,6 +421,91 @@ The contribution is an **interpretable multi-source evidence fusion framework**,
 - Say: *"our fusion framework characterizes the strength of evidence for AIS-unmatched STS
   events."*
 - Never say: *"our fusion detects dark ships."*
+
+### 4.6 Sensitivity analyses — no magic constants
+
+Every threshold in the pipeline is currently a round number. A round number
+defended by "it worked" is the easiest thing in the paper to attack. Each is swept
+on the **validation** split and the chosen value reported with its curve.
+
+| Constant | Current | Swept over | Decides |
+| -------- | ------- | ---------- | ------- |
+| STS spatial buffer | 500 m | 250 / 500 / 750 / 1000 m | identity-matching precision & recall |
+| AIS match window | ±12 h | ±1 / ±3 / ±6 / ±12 / ±24 h | how much AIS silence counts as a gap |
+| Label overpass window | ±30 min | ±5 / ±15 / ±30 / ±60 min | label positional accuracy |
+| Land clearance | 1 km | 0.5 / 1 / 2 / 3 / 5 km | harbour rejection vs anchorage loss |
+| Blob threshold `k` | 30 MAD | 3 → 40 | box length vs AIS length |
+| Length gate | 30–400 m | 20/30/50 m floor | small-vessel recall vs clutter |
+
+Two are already done and are the template for the rest:
+
+- **Land clearance** — swept 0.5–5 km over 42,557 events. Totals fell 569→188
+  between 0.5 and 1 km while tanker-involved events held at 71, then declined
+  (69, 58, 39). 1 km chosen at the elbow.
+- **Blob threshold** — swept against 114 AIS-matched vessels of known length. Box
+  length / AIS length ran 2.05× at k=3, 1.38× at k=8, 1.14× at k=20, 1.07× at
+  k=30. 30 chosen.
+
+Temporal sensitivity deserves emphasis: STS is inherently temporal, and spatial
+proximity alone does not define it. The ±12 h window is the least justified
+constant in the document.
+
+### 4.7 Ablation matrix — what does each source actually contribute?
+
+The central experiment. Without it the paper demonstrates that a pipeline works,
+but not that fusion was worth building.
+
+| Run | SAR | AIS | GFW SAR | GFW encounter | GFW gap | Registry |
+| --- | :-: | :-: | :-----: | :-----------: | :-----: | :------: |
+| A | ✓ | | | | | |
+| B | ✓ | ✓ | | | | |
+| C | ✓ | ✓ | ✓ | | | |
+| D | ✓ | ✓ | ✓ | ✓ | | |
+| E | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| F | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Each run is the full fusion model retrained on that subset, scored by PR-AUC on
+the same validation events. Reported as the marginal contribution of each source.
+
+A second ablation over candidate generation (§4.3.1): `sts` class only,
+vessel-pairing only, both.
+
+**Expect E to add nothing.** §4.2.1 measured zero GFW gap events in the Skagerrak
+and near-zero in every region except the poorly-covered control. A source that is
+absent everywhere cannot carry weight, and demonstrating that is a result.
+
+### 4.8 Hard-negative mining
+
+SAR maritime detection fails on a well-known cast of bright things that are not
+ships: wind farms, platforms, azimuth ambiguities, coastline returns, wakes, rain
+cells, islets and breaking-wave clutter. The base paper's optical imagery never
+had to deal with most of these.
+
+```
+train detector → run over negative-rich scenes → harvest false positives
+              → add as hard negatives → retrain → measure FP rate change
+```
+
+Negative-rich scenes are chosen deliberately: offshore wind farms in the Kattegat,
+high-wind acquisitions, coastline-heavy strips. The false-positive rate before and
+after is a reportable result, not an implementation detail. The static-infrastructure
+mask in `src/filters.py` already handles the recurring-position subset; hard-negative
+mining covers what a positional mask cannot.
+
+### 4.9 Success criteria — declared before results
+
+Stated in advance so thresholds cannot be fitted to whatever came out.
+
+| Level | Criterion | Status |
+| ----- | --------- | ------ |
+| **0 — Data feasibility** | ≥50 AIS-derived STS events/year in the AOI | **met**: 188 at-sea events in 7 days ≈ 9,800/yr |
+| **1 — Labelling** | ≥70% of auto-generated boxes on real targets | **met**: 100% at ≥20 dB over local background |
+| **2 — Detection** | mAP50 ≥ 0.40 on held-out validation *scenes*; small-vessel (<60 m) recall reported | pending |
+| **3 — Fusion** | proposed fusion beats the best of baselines 0–3 on PR-AUC, by more than the bootstrap CI | pending |
+| **4 — Generalisation** | test-region degradation *reported*, with no retraining and no tuning | pending |
+
+Level 4 has no pass mark on purpose. Degradation across domains is a finding to
+measure, not a bar to clear.
 
 ---
 
@@ -362,6 +624,44 @@ Before any ML line of code:
 - Fail → change training region, do not push the model downstream.
 
 This single decision outranks GFW integration, the dashboard, and the fusion engine.
+
+---
+
+## 9.5 Known limitations
+
+Consolidated rather than scattered, because a limitations section a reviewer has
+to assemble themselves reads as an omission.
+
+1. **AIS coverage varies geographically.** Reception is excellent in Danish waters
+   and poor in parts of the test regions, so AIS absence carries different meaning
+   in each. Quantified in §4.2.1.
+2. **GFW products are derived, not independent truth.** They are the output of
+   another pipeline with its own detector, matcher and biases.
+3. **Sentinel-1 resolution limits small-vessel interpretation.** At 10 m a 30 m
+   vessel is three pixels; below that, detection and clutter are indistinguishable.
+4. **SAR cannot establish identity.** Vessel type, flag and name come only from AIS
+   or registry, never from pixels. Unmatched detections receive a size estimate and
+   nothing more.
+5. **AIS absence does not establish intentional concealment.** It may be reception,
+   coverage, equipment failure, or processing. This is the document's central
+   epistemic constraint, enforced in §4.2.
+6. **Rafted vessels are not separable at 10 m.** Measured in §4.3.1: pairs merge
+   into one blob, so per-vessel attribution inside an STS event is unavailable.
+7. **Cross-region domain shift.** Sea state, traffic density, vessel population and
+   incidence angle all differ between training and test regions.
+8. **Training labels carry uncertainty.** They are AIS-derived and inherit AIS
+   position error, timestamp error and the blob finder's own failures.
+9. **Registry enrichment applies only to identifiable vessels**, which biases any
+   type-conditioned analysis toward AIS-visible traffic — precisely the opposite of
+   the population of interest.
+10. **Raw DN is acquisition-dependent.** Without calibration, absolute brightness is
+    not comparable across scenes; only within-scene relative contrast is used, and
+    §3.4 tests whether this matters.
+11. **Human review labels are reference annotations, not ground truth**, and their
+    reliability is bounded by the reported inter-annotator agreement.
+12. **Event counts are not incident counts.** A legal bunkering operation and an
+    illicit transfer are geometrically identical in SAR. This work characterises
+    evidence, not legality.
 
 ---
 

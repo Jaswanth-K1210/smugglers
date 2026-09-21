@@ -142,7 +142,7 @@ Rules:
 ```
 DMA/HELCOM AIS ──┬─► STS events in AIS (500m, ≥1h, <1kn) ──► weak labels ──┐
                  │                                                        ├─► YOLOv8 (vessel, sts)
-CDSE Sentinel Hub ┴─► calibrated S1 GeoTIFF ──► 512px tiles ───────────────┘
+Planetary Computer┴─► S1 GRD, GCP-warped to UTM/10m ──► tiles ─────────────┘
                                                                            │
                                           inference on held-out + unseen scenes
                                                                            ▼
@@ -171,7 +171,8 @@ phase has a **kill criterion** — a result that means stop and rethink.
 ### Phase 0 — Prove or kill the STS data (Days 1–7) ⚠️ THE PROJECT'S ONLY REAL GATE
 This is not optional. Before any ML code:
 
-1. Set up env, folders, `.env` for `CDSE_CLIENT_ID`/`CDSE_CLIENT_SECRET`/`GFW_API_TOKEN`.
+1. Set up env, folders, `.env` for `GFW_API_TOKEN` and `AOI_BBOX`. No SAR credential is
+   needed; the `CDSE_*` slots are retained only in case CDSE returns.
 2. Download **one month** of DMA AIS CSV for the bbox + one month HELCOM.
 3. Run `src/ais_sts.py` (paper §2.2 rule) over it. Count STS events.
 4. Match a handful to Sentinel-1 overpasses (`src/fetch_s1.py` initial test).
@@ -192,11 +193,15 @@ ship_type, length`. `src/ais_sts.py`: vessels within **500 m** for **≥1 hour**
   still applies).
 
 ### Phase 2 — Sentinel-1 acquisition, no SNAP (2 days)
-`src/fetch_s1.py` via **CDSE Sentinel Hub Process API** (returns calibrated, geocoded
-GRD GeoTIFF directly). Request VV, linear-to-dB, 10 m. Pull scenes over the STS-event
-timestamps.
-- Kill criterion: free quota can't cover ~150 scenes → fall back to `cdsetool` GRD
-  downloads for a smaller area.
+`src/fetch_s1.py` via **Microsoft Planetary Computer STAC** (`sentinel-1-grd`), which
+needs no account — CDSE Sentinel Hub was abandoned, see RESEARCH_POSITION.md §3.1.
+Search by AOI and date, sign anonymously, window-read the VV band straight out of the
+cloud-optimized GeoTIFF, and warp the GCP grid to **UTM 32N at 10 m** via `WarpedVRT`.
+Scenes are ranked by AOI overlap, not recency: a single IW slice is far smaller than a
+multi-degree AOI, so recency picks whichever corner the satellite crossed — often land.
+- Kill criterion: **met.** Skagen anchorage, 2025-06-08: 8 fully-covering scenes in 10
+  days (S1A + S1C), quick-look shows the Grenen spit and ~30 bright targets at anchor.
+- No quota to exhaust; COG window reads pull only the AOI, not whole scenes.
 
 ### Phase 3 — Auto-labeling (1 week) ⚠️ labels decide downstream accuracy
 `src/autolabel.py`. For each S1 scene, AIS positions within **±30 min** of overpass, then:
@@ -317,5 +322,6 @@ the paper.
 - HELCOM AIS: https://helcom.fi/baltic-sea-trends/data-maps/
 - GFW API docs: https://api-doc.globalfishingwatch.org/
 - GFW SAR presence dataset (4Wings): https://globalfishingwatch.org/our-apis/documentation/docs/v3/4wings
-- CDSE: https://dataspace.copernicus.eu/
+- Planetary Computer: https://planetarycomputer.microsoft.com/dataset/sentinel-1-grd
+- CDSE (unavailable as of 2026-09-20): https://dataspace.copernicus.eu/
 - MarineCadastre (stretch): https://hub.marinecadastre.gov/pages/vesseltraffic

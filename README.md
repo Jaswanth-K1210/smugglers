@@ -160,6 +160,33 @@ the precomputed endpoints keep working.
 
 ---
 
+## Detector families
+
+Nothing is trained yet — `models/` is empty and no Space is deployed. The
+benchmark compares CNNs against one transformer detector on the same split:
+
+| Family | Kind | Role |
+| ------ | ---- | ---- |
+| `yolov8n` | CNN | the originally specified baseline |
+| `yolo11n` | CNN | modern baseline |
+| `yolo12n` | CNN with attention modules | candidate |
+| `rtdetr-l` | **transformer (DETR-style)** | the transformer arm |
+
+```bash
+python -m src.train --benchmark yolov8n yolo11n yolo12n rtdetr-l
+python -m src.train --available          # what this ultralytics build supports
+```
+
+**Winning the benchmark and being deployed are separate decisions.**
+`deploy_choice()` measures CPU latency per model and reports both rankings: the
+most accurate, and the most accurate that fits a CPU budget. `/api/detect` runs
+on two shared vCPUs, so the served model will likely be a small CNN even if the
+transformer wins the table. Report the accurate one; ship the fast one.
+
+Architecture is not currently the binding constraint — measured vessel boxes run
+19–33 px and the length-gate floor is 3 px, so scene count and small-object
+handling dominate. Benchmarking across 20 tiles from one scene measures noise.
+
 ## Calibration knobs
 
 Real sensors need tuning. Each of these was measured, not guessed, and each is

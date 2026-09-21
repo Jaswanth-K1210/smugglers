@@ -161,6 +161,16 @@ def benchmark(models=("yolov8n.pt", "yolo11n.pt", "yolo12n.pt"), epochs: int = 5
     Same data, same split, same schedule — the only variable is the backbone, so
     the numbers are comparable. This is the experiment the paper should report
     instead of asserting one family is best.
+
+    Add `rtdetr-l.pt` for a transformer detector alongside the CNNs:
+
+        benchmark(["yolov8n.pt", "yolo11n.pt", "yolo12n.pt", "rtdetr-l.pt"])
+
+    Note what is being measured and what is not. The benchmark answers "which
+    family detects best on our data". It does not choose what to deploy: RT-DETR
+    is an order of magnitude larger than a nano CNN, and the served endpoint runs
+    on two free-tier vCPUs. Winning the table and serving the demo are separate
+    decisions — see `deploy_choice` below.
     """
     import pandas as pd
 
@@ -192,6 +202,62 @@ def benchmark(models=("yolov8n.pt", "yolo11n.pt", "yolo12n.pt"), epochs: int = 5
     print(f"\n{table.to_string(index=False)}\nwrote {out}")
     return table
 
+
+def deploy_choice(bench_csv=None, cpu_budget_s: float = 2.0):
+    """Pick serving weights from a benchmark, separating accuracy from latency.
+
+    The most accurate model is not automatically the deployed one. `/api/detect`
+    runs on two shared vCPUs with no GPU, so a transformer that wins mAP by a few
+    points and takes ten seconds per tile makes a worse demo than a nano CNN that
+    answers instantly. This prints both rankings and states the tradeoff rather
+    than silently optimising one of them.
+
+    Reports the accuracy winner and the smallest model within `cpu_budget_s`,
+    measured on this machine — not guessed from parameter counts.
+    """
+    import time
+
+    import numpy as np
+    import pandas as pd
+    from ultralytics import YOLO
+
+    bench_csv = Path(bench_csv or MODELS / "benchmark.csv")
+    if not bench_csv.exists():
+        raise FileNotFoundError(f"{bench_csv} — run benchmark() first")
+    table = pd.read_csv(bench_csv)
+
+    dummy = np.zeros((1024, 1024, 3), dtype="uint8")
+    rows = []
+    for _, r in table.iterrows():
+        if not isinstance(r.get("weights"), str) or not Path(r["weights"]).exists():
+            continue
+        m = YOLO(r["weights"])
+        m.predict(dummy, device="cpu", verbose=False)          # warm up
+        t0 = time.perf_counter()
+        for _ in range(3):
+            m.predict(dummy, device="cpu", verbose=False)
+        rows.append({"model": r["model"], "mAP50": r.get("mAP50"),
+                     "cpu_s_per_tile": round((time.perf_counter() - t0) / 3, 2),
+                     "weights": r["weights"]})
+
+    out = pd.DataFrame(rows)
+    if out.empty:
+        print("no usable weights in the benchmark table")
+        return out
+
+    best_acc = out.loc[out.mAP50.idxmax()]
+    affordable = out[out.cpu_s_per_tile <= cpu_budget_s]
+    serve = affordable.loc[affordable.mAP50.idxmax()] if len(affordable) else \
+        out.loc[out.cpu_s_per_tile.idxmin()]
+
+    print(out.to_string(index=False))
+    print(f"\nmost accurate : {best_acc.model}  mAP50 {best_acc.mAP50}  "
+          f"{best_acc.cpu_s_per_tile}s/tile")
+    print(f"serve on CPU  : {serve.model}  mAP50 {serve.mAP50}  "
+          f"{serve.cpu_s_per_tile}s/tile  (budget {cpu_budget_s}s)")
+    if serve.model != best_acc.model:
+        print("\nThese differ. Report the accurate one in the paper; ship the fast one.")
+    return out
 
 if __name__ == "__main__":
     # Must stay last: main() dispatches to available() and benchmark(), which

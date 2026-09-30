@@ -47,6 +47,31 @@ CLASSES_INV = {v: k for k, v in CLASSES.items()}
 SEARCH_M = 600
 MIN_LEN_M, MAX_LEN_M = 30, 400
 
+# A moving ship is displaced in azimuth by (slant range / platform speed) x its
+# radial velocity: ~115 s for Sentinel-1 IW, so up to ~60 m per knot. Measured on
+# 854 Skagen labels (Aug-Sep 2026): median offset from the AIS fix was 61 m
+# below 1 kn but 376 m above 10 kn, with 75% beyond 300 m, so a fixed window
+# drops fast ships or boxes the wrong target. The window grows with speed.
+DOPPLER_M_PER_KN = 60.0
+MAX_SEARCH_M = 2000
+# Box length / AIS length outside this range means the blob is not that ship.
+# Stationary vessels measure 0.99 median, so the band is loose on purpose.
+LEN_RATIO = (0.5, 2.0)
+
+
+def search_m(sog_kn) -> float:
+    """Search radius around an AIS fix, widened for the Doppler shift of moving ships."""
+    s = 0.0 if pd.isna(sog_kn) else max(float(sog_kn), 0.0)
+    return min(SEARCH_M + DOPPLER_M_PER_KN * s, MAX_SEARCH_M)
+
+
+def length_ok(box_len_m, ais_len_m) -> bool:
+    """False when the box is implausibly short or long for the AIS-reported ship.
+    Unknown AIS length passes: absence of evidence is not a mismatch."""
+    if pd.isna(ais_len_m) or ais_len_m <= 0:
+        return True
+    return LEN_RATIO[0] <= box_len_m / ais_len_m <= LEN_RATIO[1]
+
 # Threshold height in MADs above the local median. Calibrated, not guessed:
 # swept against 114 AIS-matched vessels of known length in the Skagen scene,
 # box length / AIS length came out 2.05x at k=3, 1.38x at k=8, 1.14x at k=20
@@ -148,7 +173,6 @@ def label_scene(tif: Path, sts_events: pd.DataFrame = None, window_min: int = 30
         img = src.read(1)
         x, y = warp_transform("EPSG:4326", src.crs, fixes.lon.tolist(), fixes.lat.tolist())
         rows, cols = rasterio.transform.rowcol(src.transform, x, y)
-        half = int(SEARCH_M / src.res[0])
         res = src.res[0]
         h, w = img.shape
 
@@ -156,17 +180,18 @@ def label_scene(tif: Path, sts_events: pd.DataFrame = None, window_min: int = 30
         for i, (r, c) in enumerate(zip(np.atleast_1d(rows), np.atleast_1d(cols))):
             if not (0 <= r < h and 0 <= c < w):
                 continue
-            bb = _blob_at(img, int(r), int(c), half)
+            f = fixes.iloc[i]
+            bb = _blob_at(img, int(r), int(c), int(search_m(f.sog) / res))
             if bb is None:
                 continue
             length_px = max(bb[2] - bb[0], bb[3] - bb[1]) + 1
             if not (MIN_LEN_M <= length_px * res <= MAX_LEN_M):
                 continue
-            f = fixes.iloc[i]
             out.append({"cls": "vessel", "mmsi": f.mmsi, "name": f["name"],
                         "ship_type": f.ship_type, "ais_length": f.length,
                         "r0": bb[0], "c0": bb[1], "r1": bb[2], "c1": bb[3],
                         "box_len_m": round(length_px * res, 1),
+                        "len_ok": length_ok(length_px * res, f.length),
                         "pred_r": int(r), "pred_c": int(c)})
         boxes = pd.DataFrame(out)
 
@@ -189,9 +214,21 @@ def label_scene(tif: Path, sts_events: pd.DataFrame = None, window_min: int = 30
                     "r0": min(a.r0, b.r0), "c0": min(a.c0, b.c0),
                     "r1": max(a.r1, b.r1), "c1": max(a.c1, b.c1),
                     "box_len_m": np.nan, "pred_r": np.nan, "pred_c": np.nan,
+                    "len_ok": True, "pair": (e.mmsi_a, e.mmsi_b),
                 })
             if sts_rows:
+                # A rafted pair is one merged blob at 10 m, so both partners'
+                # vessel boxes land on it and duplicate the sts box exactly. Two
+                # classes on one box teach neither — the pair is labelled sts only.
+                pair = {m for row in sts_rows for m in row["pair"]}
+                boxes = boxes[~boxes.mmsi.isin(pair)]
                 boxes = pd.concat([boxes, pd.DataFrame(sts_rows)], ignore_index=True)
+
+        # Wrong-length blobs go after STS pairing: a merged pair is longer than
+        # its smaller partner, and that is expected, not a mismatch.
+        if len(boxes):
+            boxes = boxes[boxes.len_ok.fillna(True).astype(bool)]
+            boxes = boxes.drop(columns=["len_ok", "pair"], errors="ignore").reset_index(drop=True)
 
     boxes["scene"] = Path(tif).stem
     return boxes

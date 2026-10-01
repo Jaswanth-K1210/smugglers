@@ -12,6 +12,16 @@ def test_utm_zone_follows_aoi():
     assert utm_crs((-70.0, -33.5, -69.0, -33.0)) == "EPSG:32719"  # southern hemisphere
 
 
+def test_empty_gfw_window(monkeypatch):
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"entries": [{"public-global-presence:v4.0": None}]}
+    monkeypatch.setattr(gfw, "_headers", lambda: {})
+    monkeypatch.setattr(gfw.requests, "post", lambda *a, **k: R())
+    a = gfw.ais_presence("2026-08-15T03:00", "2026-08-15T07:00", (56.3, 24.9, 56.8, 25.5))
+    assert a.empty and list(a.columns) == ["mmsi", "lat", "lon", "timestamp"]
+
+
 def test_presence_feeds_characterise(monkeypatch):
     rows = pd.DataFrame([{"vesselId": "v1", "mmsi": "123", "lat": 36.47, "lon": 22.97,
                           "date": "2026-08-15 04:00"}])

@@ -38,7 +38,8 @@ def _report(dataset, start, end, box, temporal, group_by=None):
     r = requests.post(f"{BASE}/4wings/report", headers=_headers(), params=params,
                       data=json.dumps({"geojson": bbox_polygon(box)}), timeout=120)
     r.raise_for_status()
-    rows = [row for e in r.json().get("entries", []) for v in e.values() for row in v]
+    # GFW returns {dataset: null} rather than [] for a window with no data.
+    rows = [row for e in (r.json().get("entries") or []) for v in e.values() for row in (v or [])]
     return pd.DataFrame(rows)
 
 

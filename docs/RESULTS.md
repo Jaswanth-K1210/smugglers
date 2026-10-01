@@ -116,6 +116,27 @@ check (an unmatched position recurring across scenes is a structure, not a
 vessel). The 98.4 % match rate is itself a result: in a well-covered AOI, AIS
 absence is rare, which is what §4.2.1 predicts.
 
+### 4b. Skagen, months the model never saw (2026-07-01 → 08-26)
+
+Same detector and AIS rule, on 50 scenes from before the training window, with
+two filter fixes from §4: per-scene de-duplication (150 m) and a persistence
+check (an unmatched position detected in more than one scene is a structure).
+
+**1297 ships checked → 1254 AIS-matched (96.7 %), 14 static objects removed,
+29 AIS-unmatched candidates.** All 29 inspected as image chips:
+
+| Verdict | Count | Typical appearance |
+| ------- | ----- | ------------------ |
+| Strong vessel-like target | 8 | bright, elongated, often with sidelobe cross or wake, 97–191 m |
+| Plausible | 8 | compact bright target clearly above clutter, 50–134 m |
+| Weak | 7 | faint, near clutter level |
+| Not a target | 6 | on bright sea-surface bands / fronts, or nothing visible |
+
+**16 strong-or-plausible AIS-unmatched candidates on unseen data.** Caveat for
+the weak class: a very bright ship can leave a faint azimuth-ambiguity "ghost"
+a few km away, which has no AIS by construction; weak candidates should not be
+reported without a second sensor (§5 optical cross-check).
+
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 
 *Pending* — one-scene cost and quality check first (`src/fetch_cdse.py`), then a

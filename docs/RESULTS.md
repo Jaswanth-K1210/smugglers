@@ -137,6 +137,36 @@ the weak class: a very bright ship can leave a faint azimuth-ambiguity "ghost"
 a few km away, which has no AIS by construction; weak candidates should not be
 reported without a second sensor (§5 optical cross-check).
 
+### 4c. Gulf of Oman — Fujairah anchorage (2026-07-01 → 09-26)
+
+Skagen-trained RT-DETR applied unchanged to a new region (`src/hunt.py`), AIS from
+GFW hourly presence (2 km / ±1 h). 57 scenes; 6 excluded because GFW returned
+no or thin AIS for their window (counting them would have made every ship in
+them "unmatched").
+
+**7,417 ships checked → 6,905 AIS-matched (93.1 %), 512 AIS-unmatched (6.9 %).**
+Unmatched rate is ~3× Skagen's.
+
+| Subset of the 512 | Count |
+| ----------------- | ----- |
+| Seen once (not at a recurring spot) | 336 |
+| Also unmatched in **GFW's own** Sentinel-1 detections (independent) | 213 |
+| Length ≥ 100 m (AIS carriage mandatory for most ships this size) | 326 |
+| Length ≥ 150 m | 225 |
+| **Length ≥ 100 m and GFW agrees** | **168** |
+| … of which seen once | 128 |
+
+The top 30 by ranking (seen once, GFW-corroborated, confidence) were all inspected:
+**30/30 are unambiguous large ships** — bright elongated hulls with sidelobe
+crosses, 134–388 m, consistent with Aframax (~245 m), Suezmax (~275 m) and VLCC
+(~330 m) tanker classes. Median length of all 512 is 131 m.
+
+Caveats: Fujairah is one of the densest anchorages in the world, where satellite
+AIS messages collide and are lost — the GFW cross-check is what guards against
+that, since GFW matches its detections against its full AIS archive. The UAE
+Navy operates from Fujairah, so naval exclusion (evidence ladder level 3) is
+still to be applied. No claim of intent is made at this level.
+
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 
 *Pending* — one-scene cost and quality check first (`src/fetch_cdse.py`), then a

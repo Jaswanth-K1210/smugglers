@@ -11,6 +11,7 @@ against. `matched=false` in a GFW layer is evidence, not a verdict.
 import json
 import sys
 
+import pandas as pd
 import requests
 
 from src.config import GFW_API_TOKEN, bbox as default_bbox
@@ -20,6 +21,47 @@ DATASETS = {
     "gaps": "public-global-gaps-events:latest",
     "encounters": "public-global-encounters-events:latest",
 }
+
+
+PRESENCE = "public-global-presence:latest"      # AIS, all vessel types
+SAR = "public-global-sar-presence:latest"       # GFW's own Sentinel-1 detections
+
+
+def _report(dataset, start, end, box, temporal, group_by=None):
+    """One 4Wings report over the box, flattened to a DataFrame (one row per cell-time)."""
+    params = {"datasets[0]": dataset, "format": "JSON", "spatial-resolution": "HIGH",
+              "temporal-resolution": temporal, "spatial-aggregation": "false",
+              "date-range": f"{pd.Timestamp(start):%Y-%m-%dT%H:%M:%S.000Z},"
+                            f"{pd.Timestamp(end):%Y-%m-%dT%H:%M:%S.000Z}"}
+    if group_by:
+        params["group-by"] = group_by
+    r = requests.post(f"{BASE}/4wings/report", headers=_headers(), params=params,
+                      data=json.dumps({"geojson": bbox_polygon(box)}), timeout=120)
+    r.raise_for_status()
+    rows = [row for e in r.json().get("entries", []) for v in e.values() for row in v]
+    return pd.DataFrame(rows)
+
+
+def ais_presence(start, end, box):
+    """AIS outside Denmark: GFW hourly presence on its ~1 km grid (0.01 deg).
+
+    Shaped like ais.load() — mmsi, lat, lon, timestamp — so dark_sts.characterise
+    runs on it unchanged. Positions are cell corners and times are hour centres,
+    so match with a buffer of at least ~1.5 km and a window of at least 1 h.
+    Includes GFW's satellite AIS, so open-sea coverage beats terrestrial-only feeds.
+    """
+    d = _report(PRESENCE, start, end, box, "HOURLY", "VESSEL_ID")
+    if d.empty:
+        return pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"])
+    return pd.DataFrame({"mmsi": d.vesselId.where(d.vesselId != "", d.mmsi),
+                         "lat": d.lat, "lon": d.lon,
+                         "timestamp": pd.to_datetime(d.date) + pd.Timedelta(minutes=30)})
+
+
+def sar_unmatched(day, box):
+    """GFW's own Sentinel-1 detections with no AIS match on `day` — an independent check."""
+    d = _report(SAR, day, pd.Timestamp(day) + pd.Timedelta(days=1), box, "DAILY")
+    return d[d.mmsi == ""][["lat", "lon", "detections"]] if len(d) else d
 
 
 def _headers():

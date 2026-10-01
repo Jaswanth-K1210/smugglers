@@ -89,8 +89,32 @@ latency is measured on the deployment host.
 
 ## 4. AIS-unmatched candidates
 
-*Pending* — count of detections in the held-out and training scenes with no AIS
-identity nearby, with image chips for visual confirmation.
+RT-DETR (conf ≥ 0.4) over all 31 scenes → 887 detections → 818 after the
+land / length / infrastructure filters. Each detection was checked for any AIS
+identity within **2 km and ±1 h** (deliberately generous, so a miss is meaningful
+and the 60 m/kn Doppler offset cannot cause a false miss).
+
+| Split | AIS matched (1+ identities) | AIS-unmatched | Total |
+| ----- | --------------------------- | ------------- | ----- |
+| test (6 held-out scenes) | 195 | 3 | 198 |
+| train | 610 | 10 | 620 |
+| **all** | **805 (98.4 %)** | **13** | **818** |
+
+Every one of the 13 was inspected as an image chip:
+
+| Verdict | Count | Notes |
+| ------- | ----- | ----- |
+| Strong vessel-like target | 3 | ~200 m streaked target (test), ~97 m and ~66 m compact targets |
+| Weak (faint, near clutter level) | 4 | ~53–67 m |
+| Duplicate detection | 1 | same scene, same position as another |
+| Sea-surface feature, not a target | 2 | large curved bright bands (wake / front) |
+| One static object seen on 3 dates | 3 | 57.770 N 10.547 E on 09-07, 09-24, 09-25 — fixed structure |
+
+**7 distinct plausible AIS-unmatched candidates (3 strong).** Two filter gaps
+surfaced and are cheap to close: per-scene de-duplication, and a persistence
+check (an unmatched position recurring across scenes is a structure, not a
+vessel). The 98.4 % match rate is itself a result: in a well-covered AOI, AIS
+absence is rare, which is what §4.2.1 predicts.
 
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 

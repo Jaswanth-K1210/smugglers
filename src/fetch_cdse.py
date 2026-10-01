@@ -2,7 +2,7 @@
 
 Planetary Computer (fetch_s1) gives raw DN, VV only, warped by us. This gives the
 same acquisition as calibrated sigma-nought, both polarisations, orthorectified by
-Sentinel Hub onto the same UTM 32N / 10 m grid, so the two can be compared on
+Sentinel Hub onto the same UTM / 10 m grid, so the two can be compared on
 identical scenes (RESULTS.md §5, RESEARCH_POSITION.md §3.4).
 
 It COSTS processing units (PU) from a 30k/month quota. `fetch` only estimates
@@ -24,7 +24,7 @@ from rasterio.merge import merge
 from rasterio.warp import transform_bounds
 
 from src.config import CDSE_CLIENT_ID, CDSE_CLIENT_SECRET, DATA, bbox as default_bbox
-from src.fetch_s1 import DST_CRS, DST_RES
+from src.fetch_s1 import DST_RES, utm_crs
 
 TOKEN_URL = ("https://identity.dataspace.copernicus.eu/auth/realms/CDSE/"
              "protocol/openid-connect/token")
@@ -42,7 +42,8 @@ function evaluatePixel(s) { return [s.VV * 10000, s.VH * 10000, s.dataMask]; }
 
 def tiles(box=None, res=DST_RES, max_px=MAX_PX):
     """Split the AOI into UTM bboxes no larger than max_px on a side."""
-    x0, y0, x1, y1 = transform_bounds("EPSG:4326", DST_CRS, *(box or default_bbox()))
+    box = box or default_bbox()
+    x0, y0, x1, y1 = transform_bounds("EPSG:4326", utm_crs(box), *box)
     step = max_px * res
     xs, ys = np.arange(x0, x1, step), np.arange(y0, y1, step)
     return [(x, y, min(x + step, x1), min(y + step, y1)) for x in xs for y in ys]
@@ -69,11 +70,11 @@ def _token():
     return r.json()["access_token"]
 
 
-def _request(b, t0, t1, res):
+def _request(b, t0, t1, res, crs):
     return {
         "input": {
             "bounds": {"bbox": list(b),
-                       "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/32632"}},
+                       "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/" + crs.split(":")[1]}},
             "data": [{
                 "type": "sentinel-1-grd",
                 "dataFilter": {"timeRange": {"from": t0, "to": t1}, "acquisitionMode": "IW",
@@ -113,7 +114,7 @@ def fetch(scene_time, box=None, name: str = None, confirm: bool = False, res=DST
     head = {"Authorization": f"Bearer {_token()}"}
     mems, parts, spent = [], [], 0.0
     for b in bxs:
-        r = requests.post(PROCESS_URL, json=_request(b, t0, t1, res), headers=head, timeout=300)
+        r = requests.post(PROCESS_URL, json=_request(b, t0, t1, res, utm_crs(box or default_bbox())), headers=head, timeout=300)
         if r.status_code != 200:
             raise RuntimeError(f"CDSE {r.status_code}: {r.text[:300]}")
         spent += float(r.headers.get("x-processingunits-spent", 0))

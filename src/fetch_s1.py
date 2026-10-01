@@ -33,11 +33,18 @@ STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
 SAS = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
 RAW = DATA / "sar_raw"
 
-# ponytail: one UTM zone for the whole AOI. 32N covers 6-12E; Denmark's east
-# edge runs ~0.5 deg past it, costing well under a percent of scale. Split into
-# 32N/33N only if we ever extend the AOI further east.
-DST_CRS = "EPSG:32632"
+# One UTM zone per AOI, chosen from its centre. An AOI straddling a zone edge
+# costs well under a percent of scale; one far outside a fixed zone (Oman is ~47
+# deg east of 32N) would be badly stretched, so the zone follows the AOI.
+DST_CRS = "EPSG:32632"   # Skagen; kept for callers that assume the training AOI
 DST_RES = 10.0
+
+
+def utm_crs(box) -> str:
+    """UTM zone EPSG code for the centre of a (lon0, lat0, lon1, lat1) box."""
+    lon, lat = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    zone = int((lon + 180) // 6) + 1
+    return f"EPSG:{(32600 if lat >= 0 else 32700) + zone}"
 
 # Keep GDAL from listing the whole blob container on every open.
 os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
@@ -112,10 +119,11 @@ def fetch(item, box=None, pol: str = "vv", out_dir: Path = RAW) -> Path:
     with rasterio.open(sign(item["assets"][pol]["href"])) as src:
         if not src.gcps[0]:
             raise RuntimeError(f"{item['id']} has no GCPs; cannot geocode")
+        crs = utm_crs(box)
         with WarpedVRT(
-            src, crs=DST_CRS, resolution=(DST_RES, DST_RES), resampling=Resampling.bilinear
+            src, crs=crs, resolution=(DST_RES, DST_RES), resampling=Resampling.bilinear
         ) as vrt:
-            left, bottom, right, top = transform_bounds("EPSG:4326", DST_CRS, *box)
+            left, bottom, right, top = transform_bounds("EPSG:4326", crs, *box)
             window = from_bounds(left, bottom, right, top, vrt.transform).round_offsets().round_lengths()
             # Clip to the scene: most overpasses only clip a corner of the AOI.
             window = window.intersection(rasterio.windows.Window(0, 0, vrt.width, vrt.height))

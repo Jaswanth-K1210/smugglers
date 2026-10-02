@@ -10,6 +10,7 @@ against. `matched=false` in a GFW layer is evidence, not a verdict.
 """
 import json
 import sys
+import time
 
 import pandas as pd
 import requests
@@ -27,6 +28,16 @@ PRESENCE = "public-global-presence:latest"      # AIS, all vessel types
 SAR = "public-global-sar-presence:latest"       # GFW's own Sentinel-1 detections
 
 
+def _post(url, tries=5, wait=30, **kw):
+    """POST with backoff on 429 (rate limit) and 5xx (GFW gateway hiccups)."""
+    for i in range(tries):
+        r = requests.post(url, headers=_headers(), **kw)
+        if r.status_code != 429 and r.status_code < 500:
+            return r
+        time.sleep(wait * (i + 1))
+    return r
+
+
 def _report(dataset, start, end, box, temporal, group_by=None):
     """One 4Wings report over the box, flattened to a DataFrame (one row per cell-time)."""
     params = {"datasets[0]": dataset, "format": "JSON", "spatial-resolution": "HIGH",
@@ -35,8 +46,8 @@ def _report(dataset, start, end, box, temporal, group_by=None):
                             f"{pd.Timestamp(end):%Y-%m-%dT%H:%M:%S.000Z}"}
     if group_by:
         params["group-by"] = group_by
-    r = requests.post(f"{BASE}/4wings/report", headers=_headers(), params=params,
-                      data=json.dumps({"geojson": bbox_polygon(box)}), timeout=120)
+    r = _post(f"{BASE}/4wings/report", params=params,
+              data=json.dumps({"geojson": bbox_polygon(box)}), timeout=120)
     r.raise_for_status()
     # GFW returns {dataset: null} rather than [] for a window with no data.
     rows = [row for e in (r.json().get("entries") or []) for v in e.values() for row in (v or [])]
@@ -95,9 +106,8 @@ def events(kind: str, start: str, end: str, box=None, limit: int = 100, offset: 
         "endDate": end,
         "geometry": bbox_polygon(box),
     }
-    r = requests.post(
+    r = _post(
         f"{BASE}/events",
-        headers=_headers(),
         params={"limit": limit, "offset": offset},
         data=json.dumps(body),
         timeout=90,

@@ -14,6 +14,7 @@ def test_utm_zone_follows_aoi():
 
 def test_empty_gfw_window(monkeypatch):
     class R:
+        status_code = 200
         def raise_for_status(self): pass
         def json(self): return {"entries": [{"public-global-presence:v4.0": None}]}
     monkeypatch.setattr(gfw, "_headers", lambda: {})
@@ -31,3 +32,13 @@ def test_presence_feeds_characterise(monkeypatch):
                         {"lat": 36.37, "lon": 23.10, "time": pd.Timestamp("2026-08-15 05:00")}])
     got = dark_sts.characterise(det, a, buffer_m=2000, window_h=1).category.tolist()
     assert got == [dark_sts.AIS_PARTIAL, dark_sts.AIS_UNMATCHED]
+
+
+def test_rate_limit_is_retried(monkeypatch):
+    codes = iter([429, 502, 200])
+    class R:
+        def __init__(self): self.status_code = next(codes)
+    monkeypatch.setattr(gfw, "_headers", lambda: {})
+    monkeypatch.setattr(gfw.time, "sleep", lambda s: None)
+    monkeypatch.setattr(gfw.requests, "post", lambda *a, **k: R())
+    assert gfw._post("u").status_code == 200

@@ -78,3 +78,10 @@ def test_wide_cutoff_follows_length_band():
              {"category": "AIS_UNMATCHED", "hull_m": 300, "beam_m": 75}]   # normal for its band
     out, cut = hunt.mark_wide(pd.DataFrame(rows))
     assert out.wide.tolist()[-2:] == [True, False]
+
+
+def test_wide_needs_enough_matched_ships():
+    rows = [{"category": "AIS_VISIBLE", "hull_m": 250, "beam_m": 180}] * 5 + \
+           [{"category": "AIS_UNMATCHED", "hull_m": 250, "beam_m": 190}]
+    out, cut = hunt.mark_wide(pd.DataFrame(rows))
+    assert not out.wide.any()

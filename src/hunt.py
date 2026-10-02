@@ -183,14 +183,16 @@ def hull_shape(res, k=30.0, half=40):
     return out
 
 
-def mark_wide(res, q=0.99):
+def mark_wide(res, q=0.99, min_n=50):
     """Flag hulls wider than the q-quantile of AIS-matched ships in their length band.
 
     AIS-matched ships are overwhelmingly single hulls, so they set what one ship
     measures like in this region's imagery. Returns (res, {band: cutoff_m}).
     """
     m = res[res.category != dark_sts.AIS_UNMATCHED]
-    cut = {b: m[(m.hull_m >= b[0]) & (m.hull_m < b[1])].beam_m.quantile(q) for b in BANDS}
+    band = {b: m[(m.hull_m >= b[0]) & (m.hull_m < b[1])].beam_m.dropna() for b in BANDS}
+    # too few matched ships and p99 is just the widest one seen: flag nothing in that band
+    cut = {b: v.quantile(q) if len(v) >= min_n else np.nan for b, v in band.items()}
     wide = np.zeros(len(res), bool)
     for (lo, hi), c in cut.items():
         wide |= ((res.hull_m >= lo) & (res.hull_m < hi) & (res.beam_m > c)).to_numpy()

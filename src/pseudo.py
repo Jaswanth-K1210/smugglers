@@ -56,13 +56,21 @@ def boxes_for(g, tif):
     return pd.DataFrame(keep, columns=cols), pd.DataFrame(skip, columns=cols)
 
 
-def build(regions=("oman", "laconia"), root=ROOT, out_dir=autolabel.TILES):
-    """Write tiles + YOLO labels for every scene in hunt_<region>/all_checked.csv."""
+def build(regions=("oman", "laconia"), root=ROOT, out_dir=autolabel.TILES, max_tiles=400):
+    """Write tiles + YOLO labels from hunt_<region>/all_checked.csv, up to max_tiles per region.
+
+    The cap keeps one busy region from outweighing the others; scenes are taken
+    in time order, so the tiles still span the whole period.
+    """
     total = 0
     for region in regions:
         res = pd.read_csv(root / f"hunt_{region}" / "all_checked.csv")
         n_tiles = n_boxes = 0
-        for scene, g in res.groupby("scene"):
+        scenes = sorted(res.groupby("scene"), key=lambda sg: str(sg[1].time.iloc[0]))
+        step = max(1, len(scenes) // max(1, max_tiles // 15))      # ~15 tiles per busy scene
+        for scene, g in scenes[::step]:
+            if n_tiles >= max_tiles:
+                break
             try:
                 tif = scene_tif(g.tif.iloc[0], region, root)
                 keep, skip = boxes_for(g, tif)

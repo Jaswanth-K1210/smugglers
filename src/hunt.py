@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import rasterio
+import requests
 
 from src import dark_sts, fetch_s1, gfw
 from src.filters import clean_detections
@@ -53,6 +54,20 @@ PAIR_M = 500          # the STS definition used in Phase 1
 BANDS = [(0, 200), (200, 280), (280, 10_000)]   # hull length bands for the beam cutoff
 COUNT_M = 1000        # radius for radar-vs-AIS counting (GFW grid is ~1 km)
 VESSEL_CONF, STS_CONF = 0.4, 0.25
+
+
+def scene_tif(tif, region, root=Path("/content/drive/MyDrive/darksts")):
+    """The saved scene, re-downloaded to Drive if the runtime that held it is gone."""
+    tif = Path(tif)
+    if tif.exists():
+        return tif
+    out = root / f"hunt_{region}" / "scenes"
+    if (out / tif.name).exists():
+        return out / tif.name
+    item_id = tif.stem.rsplit("_", 1)[0]                      # drop the _vv suffix
+    r = requests.get(f"{fetch_s1.STAC}/collections/sentinel-1-grd/items/{item_id}", timeout=90)
+    r.raise_for_status()
+    return fetch_s1.fetch(r.json(), box=REGIONS[region], out_dir=out)
 
 
 def dedupe(d, radius_m=DUP_M):
@@ -374,9 +389,9 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, re
     if reuse and (out / "detections.csv").exists():
         clean = pd.read_csv(out / "detections.csv", parse_dates=["time"])
         print(f"reusing {len(clean)} detections from {out / 'detections.csv'}")
-        # scenes from a reset runtime live on in out/scenes (hunt or pseudo.build)
-        clean["tif"] = [t if Path(t).exists() else str(out / "scenes" / Path(t).name)
-                        for t in clean.tif]
+        # scenes from a reset runtime: found in out/scenes, or downloaded there again
+        tifs = {t: str(scene_tif(t, region, out.parent)) for t in clean.tif.unique()}
+        clean["tif"] = clean.tif.map(tifs)
     else:
         clean = detect_region(box, start, end, weights, out / "scenes")   # on Drive: reuse survives a reset
         clean.to_csv(out / "detections.csv", index=False)   # survives a crash below

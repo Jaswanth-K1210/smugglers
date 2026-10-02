@@ -14,27 +14,12 @@ from pathlib import Path
 
 import pandas as pd
 import rasterio
-import requests
 
-from src import autolabel, dark_sts, fetch_s1
-from src.hunt import REGIONS
+from src import autolabel, dark_sts
+from src.hunt import REGIONS, scene_tif
 
 ROOT = Path("/content/drive/MyDrive/darksts")
 HALF_PX = 20                  # detections are centred on the hull already
-
-
-def scene_tif(tif, region, root=ROOT):
-    """The saved scene, re-downloaded to Drive if the runtime that held it is gone."""
-    tif = Path(tif)
-    if tif.exists():
-        return tif
-    out = root / f"hunt_{region}" / "scenes"
-    if (out / tif.name).exists():
-        return out / tif.name
-    item_id = tif.stem.rsplit("_", 1)[0]                      # drop the _vv suffix
-    r = requests.get(f"{fetch_s1.STAC}/collections/sentinel-1-grd/items/{item_id}", timeout=90)
-    r.raise_for_status()
-    return fetch_s1.fetch(r.json(), box=REGIONS[region], out_dir=out)
 
 
 def boxes_for(g, tif):

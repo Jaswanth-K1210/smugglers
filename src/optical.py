@@ -17,7 +17,7 @@ from rasterio.windows import from_bounds
 
 from src.fetch_s1 import STAC, sign
 
-CLOUDY = {3, 8, 9, 10}        # SCL: cloud shadow, cloud medium / high, cirrus
+CLOUDY = {3, 7, 8, 9, 10}     # SCL: cloud shadow, unclassified (thin cloud / haze), cloud, cirrus
 HALF_M = 750                  # chip half-width
 
 
@@ -85,7 +85,9 @@ def run(regions=("oman", "laconia"), n=10, root="/content/drive/MyDrive/darksts"
         fig, axs = plt.subplots(2, 5, figsize=(15, 7))
         for ax, row, rgb in zip(axs.flat, rows, chips):
             if rgb is not None:
-                ax.imshow(np.clip(rgb.astype(float) * 2.5, 0, 255).astype("uint8"))   # sea is dark
+                v = rgb[rgb.sum(-1) > 0]
+                lo, hi = np.percentile(v, [2, 98]) if v.size else (0, 255)
+                ax.imshow(np.clip((rgb - lo) / max(hi - lo, 1), 0, 1))
                 h, w = rgb.shape[:2]
                 ax.add_patch(plt.Circle((w / 2, h / 2), w * 0.12, fill=False, ec="r"))
             ax.set_title(f"[{row['tier']}] {row['lat']:.3f}N {row['lon']:.3f}E\n"

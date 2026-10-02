@@ -201,6 +201,45 @@ def mark_wide(res, q=0.99, min_n=50):
     return out, cut
 
 
+def one_hull(tif, a, b, k=30.0, margin=20, along=0.8):
+    """True when two pair detections are one radar object, not two ships.
+
+    The main tier-B false alarm: one long hull, or a hull and its sidelobe
+    cross, detected twice. Both detections then sit on the same bright
+    component (threshold as in hull_shape). Further apart than RAFTED_M that is
+    never two hulls. Closer, a rafted pair is also one component, so it is one
+    hull only when the step from a to b runs along the component's long axis
+    (|cos| > `along`); side by side is a rafted pair.
+    """
+    from scipy import ndimage
+    with rasterio.open(tif) as s:
+        (ra, ca), (rb, cb) = s.index(a.x, a.y), s.index(b.x, b.y)
+        r0, c0 = min(ra, rb) - margin, min(ca, cb) - margin
+        w = s.read(1, window=rasterio.windows.Window(c0, r0, abs(cb - ca) + 2 * margin,
+                                                     abs(rb - ra) + 2 * margin),
+                   boundless=True, fill_value=0).astype(float)
+    water = w[w > 0]
+    if water.size < 50:
+        return False
+    med = np.median(water)
+    lab, n = ndimage.label(w > med + k * max(np.median(np.abs(water - med)) * 1.4826, 1.0))
+
+    def comp(r, c):                                   # component at or next to the centre
+        win = lab[max(r - 3, 0):r + 4, max(c - 3, 0):c + 4]
+        ids = win[win > 0]
+        return int(np.bincount(ids).argmax()) if ids.size else 0
+
+    la, lb = comp(ra - r0, ca - c0), comp(rb - r0, cb - c0)
+    if la == 0 or la != lb:
+        return False
+    if near(a.lat, a.lon, b.lat, b.lon) > RAFTED_M:
+        return True
+    ys, xs = np.where(lab == la)
+    axis = np.linalg.eigh(np.cov(np.vstack([ys, xs])))[1][:, -1]     # long axis (row, col)
+    step = np.array([rb - ra, cb - ca], float)
+    return bool(abs(axis @ step) / max(np.linalg.norm(step), 1e-9) > along)
+
+
 def sts_candidates(res):
     """Two-ships-together candidates from pairs, over-wide hulls and the sts class.
 
@@ -215,6 +254,11 @@ def sts_candidates(res):
             d = near(la[i], lo[i], la[i + 1:], lo[i + 1:])
             for j in np.where(d <= PAIR_M)[0] + i + 1:
                 a, b = g.loc[i], g.loc[j]
+                try:
+                    if one_hull(a.tif, a, b):
+                        continue
+                except Exception:                     # scene not on disk: keep the pair
+                    pass
                 rows.append({"scene": scene, "time": a.time, "tif": a.tif,
                              "lat": (a.lat + b.lat) / 2, "lon": (a.lon + b.lon) / 2,
                              "x": (a.x + b.x) / 2, "y": (a.y + b.y) / 2,
@@ -330,6 +374,9 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, re
     if reuse and (out / "detections.csv").exists():
         clean = pd.read_csv(out / "detections.csv", parse_dates=["time"])
         print(f"reusing {len(clean)} detections from {out / 'detections.csv'}")
+        # scenes from a reset runtime live on in out/scenes (hunt or pseudo.build)
+        clean["tif"] = [t if Path(t).exists() else str(out / "scenes" / Path(t).name)
+                        for t in clean.tif]
     else:
         clean = detect_region(box, start, end, weights, out / "scenes")   # on Drive: reuse survives a reset
         clean.to_csv(out / "detections.csv", index=False)   # survives a crash below

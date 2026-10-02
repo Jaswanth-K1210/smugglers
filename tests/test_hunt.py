@@ -91,3 +91,29 @@ def test_no_gfw_encounters():
     c = pd.DataFrame([{"lat": 25.0, "lon": 56.6, "time": T}])
     enc = pd.DataFrame(columns=["lat", "lon", "start", "end"])
     assert hunt.mark_encounters(c, enc).gfw_encounter.tolist() == [False]
+
+
+def test_one_long_hull_is_not_a_pair(tmp_path):
+    import numpy as np, rasterio
+    from rasterio.transform import from_origin
+    img = np.random.default_rng(1).normal(100, 5, (400, 400)).clip(1).astype("uint16")
+    img[50:56, 50:85] = 5000            # one 350 m hull, detected at both ends
+    img[150:156, 50:80] = 5000          # rafted: two hulls side by side, touching
+    img[156:162, 50:80] = 5000
+    img[250:256, 50:80] = 5000          # two separate hulls 300 m apart
+    img[250:256, 110:140] = 5000
+    img[350:353, 50:110] = 5000         # bright hull + sidelobe line, 400 m
+    tif = tmp_path / "s.tif"
+    t = from_origin(0, 4000, 10, 10)
+    with rasterio.open(tif, "w", driver="GTiff", height=400, width=400, count=1, dtype="uint16",
+                       crs="EPSG:32640", transform=t) as dst:
+        dst.write(img, 1)
+    from rasterio.warp import transform as tr
+    def pt(r, c):
+        x, y = t * (c + 0.5, r + 0.5)
+        (lon,), (lat,) = tr("EPSG:32640", "EPSG:4326", [x], [y])
+        return pd.Series({"x": x, "y": y, "lat": lat, "lon": lon})
+    assert hunt.one_hull(tif, pt(53, 56), pt(53, 80))          # along one hull
+    assert not hunt.one_hull(tif, pt(153, 65), pt(159, 65))    # side by side
+    assert not hunt.one_hull(tif, pt(253, 65), pt(253, 125))   # two hulls
+    assert hunt.one_hull(tif, pt(351, 52), pt(351, 105))       # 530 m apart on one streak

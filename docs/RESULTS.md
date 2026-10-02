@@ -193,8 +193,11 @@ The 30 strongest (all of A, then B) were inspected as image chips:
 
 **13 of 30 are plausible-or-better two-vessel AIS-unmatched candidates; 4 are
 strong.** Main failure: one long hull detected twice, which the pair rule reads
-as two ships. Fixes still to do: drop pairs whose two boxes are collinear and
-touching end to end, and drop positions that recur across scenes (streaks).
+as two ships. Fix (commit after `42150b5`, `hunt.one_hull`): a pair whose two
+detections sit on the same bright radar component is one object when they are
+more than 150 m apart, or when the step between them runs along the hull's
+long axis; side by side stays a rafted pair. Recurring positions (streaks) are
+still to do. The Oman numbers above predate the fix.
 No claim of intent is made. Optical confirmation (Sentinel-2 / Landsat) is the next level of the
 evidence ladder.
 

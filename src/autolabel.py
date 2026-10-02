@@ -234,11 +234,13 @@ def label_scene(tif: Path, sts_events: pd.DataFrame = None, window_min: int = 30
     return boxes
 
 
-def tile_scene(tif: Path, boxes: pd.DataFrame, size: int = 1024, out_dir: Path = None):
+def tile_scene(tif: Path, boxes: pd.DataFrame, size: int = 1024, out_dir: Path = None,
+               skip: pd.DataFrame = None):
     """Cut the scene into tiles and write YOLO labels for the boxes inside each.
 
     Tiles with no box are dropped: an empty tile of open sea teaches nothing and
-    would swamp the positives.
+    would swamp the positives. Tiles holding any `skip` box (r0..c1) are dropped
+    too: an unlabelled ship in a tile is taught as background.
     """
     out_dir = out_dir or TILES
     (out_dir / "images").mkdir(parents=True, exist_ok=True)
@@ -252,6 +254,10 @@ def tile_scene(tif: Path, boxes: pd.DataFrame, size: int = 1024, out_dir: Path =
                 here = boxes[(boxes.r0 >= top) & (boxes.r1 < top + size) &
                              (boxes.c0 >= left) & (boxes.c1 < left + size)]
                 if here.empty:
+                    continue
+                if skip is not None and len(skip) and (
+                        (skip.r1 >= top) & (skip.r0 < top + size) &
+                        (skip.c1 >= left) & (skip.c0 < left + size)).any():
                     continue
                 win = rasterio.windows.Window(left, top, size, size)
                 img = src.read(1, window=win)

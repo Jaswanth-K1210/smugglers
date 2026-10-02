@@ -17,9 +17,11 @@ works on raw DN. We never need absolute sigma-nought.
 """
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import rasterio
 import requests
 from rasterio.enums import Resampling
@@ -31,6 +33,7 @@ from src.config import DATA, bbox as default_bbox
 
 STAC = "https://planetarycomputer.microsoft.com/api/stac/v1"
 SAS = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
+TOKEN = "https://planetarycomputer.microsoft.com/api/sas/v1/token"
 RAW = DATA / "sar_raw"
 
 # One UTM zone per AOI, chosen from its centre. An AOI straddling a zone edge
@@ -94,11 +97,29 @@ def overlap(item, box=None) -> float:
     return w * h / ((hi_lon - lo_lon) * (hi_lat - lo_lat))
 
 
+_tokens = {}
+
+
 def sign(href: str) -> str:
-    """Planetary Computer SAS signing. Anonymous for sentinel-1-grd."""
-    r = requests.get(SAS, params={"href": href}, timeout=60)
-    r.raise_for_status()
-    return r.json()["href"]
+    """Planetary Computer SAS signing, one token per storage container.
+
+    Signing each file hits the anonymous rate limit (429) after a few dozen
+    calls; a container token is valid for about an hour and covers every file.
+    """
+    host, container = href.split("/")[2], href.split("/")[3]
+    key = (host.split(".")[0], container)
+    tok, expiry = _tokens.get(key, (None, pd.Timestamp(0, tz="UTC")))
+    if expiry - pd.Timestamp.now(tz="UTC") < pd.Timedelta(minutes=5):
+        for i in range(5):
+            r = requests.get(f"{TOKEN}/{key[0]}/{key[1]}", timeout=60)
+            if r.status_code != 429:
+                break
+            time.sleep(10 * (i + 1))
+        r.raise_for_status()
+        j = r.json()
+        tok, expiry = j["token"], pd.Timestamp(j["msft:expiry"])
+        _tokens[key] = (tok, expiry)
+    return f"{href}?{tok}"
 
 
 def fetch(item, box=None, pol: str = "vv", out_dir: Path = RAW) -> Path:

@@ -42,3 +42,18 @@ def test_rate_limit_is_retried(monkeypatch):
     monkeypatch.setattr(gfw.time, "sleep", lambda s: None)
     monkeypatch.setattr(gfw.requests, "post", lambda *a, **k: R())
     assert gfw._post("u").status_code == 200
+
+
+def test_one_token_per_container(monkeypatch):
+    from src import fetch_s1
+    calls = []
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"token": "sig=x", "msft:expiry": "2099-01-01T00:00:00Z"}
+    monkeypatch.setattr(fetch_s1, "_tokens", {})
+    monkeypatch.setattr(fetch_s1.requests, "get", lambda url, **k: calls.append(url) or R())
+    a = fetch_s1.sign("https://acct.blob.core.windows.net/cont/a/b.tif")
+    fetch_s1.sign("https://acct.blob.core.windows.net/cont/c.tif")
+    assert a == "https://acct.blob.core.windows.net/cont/a/b.tif?sig=x"
+    assert calls == [f"{fetch_s1.TOKEN}/acct/cont"]

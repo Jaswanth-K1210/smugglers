@@ -12,9 +12,13 @@ Two outputs per region:
   STS candidates  — two ships close together, found three ways, because at 10 m a
                     rafted pair is often one blob:
                       pair       two detections <= 500 m apart (<= 150 m = rafted)
-                      wide       one hull wider than any single ship: rafted
-                                 vessels lie side by side, so a pair is WIDER,
-                                 not longer — length alone flags single VLCCs
+                      wide       one hull wider than 99 % of AIS-matched ships of
+                                 its length (rafted vessels lie side by side, so
+                                 a pair is wider, not longer). Measured beam
+                                 grows with ship size from blur and sidelobes,
+                                 so the cutoff is per length band, per region.
+                    Evidence tiers: A two hulls <= 150 m, B two hulls 150-500 m,
+                    C one over-wide hull. Only A and B show two ships directly.
                       sts_class  the detector's own `sts` class
                     Each is checked by COUNTING: radar ships vs distinct AIS
                     identities within 1 km. One partner silent next to a
@@ -46,7 +50,7 @@ THIN = 0.3            # a scene with < 30 % of the region's median AIS cells is 
 DUP_M = 30            # closer than this is the same target detected twice
 RAFTED_M = 150        # centre spacing of two hulls moored side by side
 PAIR_M = 500          # the STS definition used in Phase 1
-WIDE_M = 85           # beam of the largest tankers is ~60 m; two side by side ~90-120 m
+BANDS = [(0, 200), (200, 280), (280, 10_000)]   # hull length bands for the beam cutoff
 COUNT_M = 1000        # radius for radar-vs-AIS counting (GFW grid is ~1 km)
 VESSEL_CONF, STS_CONF = 0.4, 0.25
 
@@ -179,6 +183,22 @@ def hull_shape(res, k=30.0, half=40):
     return out
 
 
+def mark_wide(res, q=0.99):
+    """Flag hulls wider than the q-quantile of AIS-matched ships in their length band.
+
+    AIS-matched ships are overwhelmingly single hulls, so they set what one ship
+    measures like in this region's imagery. Returns (res, {band: cutoff_m}).
+    """
+    m = res[res.category != dark_sts.AIS_UNMATCHED]
+    cut = {b: m[(m.hull_m >= b[0]) & (m.hull_m < b[1])].beam_m.quantile(q) for b in BANDS}
+    wide = np.zeros(len(res), bool)
+    for (lo, hi), c in cut.items():
+        wide |= ((res.hull_m >= lo) & (res.hull_m < hi) & (res.beam_m > c)).to_numpy()
+    out = res.copy()
+    out["wide"] = wide
+    return out, cut
+
+
 def sts_candidates(res):
     """Two-ships-together candidates from pairs, over-wide hulls and the sts class.
 
@@ -199,7 +219,7 @@ def sts_candidates(res):
                              "evidence": "pair" if d[j - i - 1] > RAFTED_M else "rafted",
                              "spacing_m": round(float(d[j - i - 1])),
                              "length_m": max(a.length_m, b.length_m), "conf": min(a.conf, b.conf)})
-        wide = g.beam_m >= WIDE_M if "beam_m" in g else False
+        wide = g.wide.astype(bool) if "wide" in g else False
         for _, r in g[(g.cls == "sts") | wide].iterrows():
             rows.append({"scene": scene, "time": r.time, "tif": r.tif, "lat": r.lat, "lon": r.lon,
                          "x": r.x, "y": r.y, "spacing_m": 0, "length_m": r.length_m, "conf": r.conf,
@@ -327,12 +347,9 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, re
 
     # STS — hull beam measured from the image; calibration printed so the 85 m
     # threshold can be checked against ships whose single identity is known
-    res = hull_shape(res)
-    one = res[res.category != dark_sts.AIS_UNMATCHED]
-    big = one[one.hull_m >= 200].beam_m.dropna()
-    if len(big):
-        print(f"beam of AIS-matched ships >=200 m: median {big.median():.0f} m, "
-              f"p90 {big.quantile(.9):.0f} m, p99 {big.quantile(.99):.0f} m (threshold {WIDE_M} m)")
+    res, cut = mark_wide(hull_shape(res))
+    print("over-wide cutoff (p99 beam of AIS-matched ships) by hull length: " +
+          ", ".join(f"{lo}-{hi if hi < 10_000 else '+'} m: {c:.0f} m" for (lo, hi), c in cut.items()))
     res.drop(columns=["mmsis"]).to_csv(out / "all_checked.csv", index=False)
     sts = sts_candidates(res)
     if len(sts):
@@ -346,10 +363,13 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, re
         # Hulls touching (rafted / one over-wide blob / sts class) is a transfer;
         # 150-500 m apart in a crowded anchorage may just be neighbours.
         sts["touching"] = sts.evidence.str.contains("rafted|wide|sts_class")
-        sts = sts.sort_values(["dark_sts", "touching", "missing", "conf"], ascending=False)
+        sts["tier"] = np.where(sts.evidence.str.contains("rafted"), "A",
+                      np.where(sts.evidence.str.contains("pair"), "B", "C"))
+        sts = sts.sort_values(["dark_sts", "tier", "missing", "conf"],
+                              ascending=[False, True, False, False])
         sts.to_csv(out / "sts_candidates.csv", index=False)
         chip_sheet(sts, out / "sts_chips.png",
-                   lambda r: f"{str(r.time)[:16]} {r.evidence}\n"
+                   lambda r: f"[{r.tier}] {str(r.time)[:16]} {r.evidence}\n"
                              f"radar {r.n_radar} / AIS {r.n_ais} -> {r.missing} silent"
                              f"{'  GFW-enc' if r.gfw_encounter else ''}  ~{r.length_m:.0f} m"
                              f"{f' beam {r.beam_m:.0f} m' if r.get('beam_m') == r.get('beam_m') else ''}")
@@ -361,7 +381,8 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, re
         print(f"STS candidates: {len(sts)} | by evidence {sts.evidence.value_counts().to_dict()}\n"
               f"  AIS: {sts.category.value_counts().to_dict()} | "
               f"{sts.gfw_encounter.sum()} match a GFW AIS encounter | "
-              f"{sts.dark_sts.sum()} dark-STS candidates (>=1 ship silent, no AIS encounter), "
-              f"**{(sts.dark_sts & sts.touching).sum()} with hulls touching**")
+              f"{sts.dark_sts.sum()} dark-STS candidates (>=1 ship silent, no AIS encounter)\n"
+              f"  dark-STS by tier: " + str(sts[sts.dark_sts].tier.value_counts().sort_index().to_dict()) +
+              "   (A two hulls <=150 m, B two hulls 150-500 m, C one over-wide hull)")
     print(f"saved to {out}")
     return res, un, sts

@@ -8,9 +8,9 @@ T = pd.Timestamp("2026-08-23 02:06")
 DEG_M = 111_000                                  # metres per degree of latitude
 
 
-def det(scene, lat, conf=0.6, length=200, cls="vessel", lon=56.6, beam=40.0):
+def det(scene, lat, conf=0.6, length=200, cls="vessel", lon=56.6, beam=40.0, wide=False):
     return {"scene": scene, "lat": lat, "lon": lon, "x": 0.0, "y": 0.0, "conf": conf,
-            "length_m": length, "beam_m": beam, "cls": cls, "time": T, "tif": "t.tif"}
+            "length_m": length, "beam_m": beam, "wide": wide, "cls": cls, "time": T, "tif": "t.tif"}
 
 
 def test_dedupe_keeps_rafted_partner():
@@ -29,7 +29,7 @@ def test_thin_scenes_excluded():
 
 def test_sts_candidates_merge_evidence():
     res = pd.DataFrame([det("a", 25.0), det("a", 25.0 + 60 / DEG_M),            # rafted pair
-                        det("a", 25.0 + 30 / DEG_M, beam=110),                   # same spot, over-wide
+                        det("a", 25.0 + 30 / DEG_M, beam=110, wide=True),        # same spot, over-wide
                         det("a", 25.1, length=380),                              # long single VLCC: not STS
                         det("a", 25.2), det("a", 25.2 + 400 / DEG_M),            # close pair
                         det("a", 25.4)])                                         # alone
@@ -67,5 +67,14 @@ def test_hull_shape_separates_one_hull_from_two(tmp_path):
     res = pd.DataFrame([{"tif": str(tif), "x": 1000.0, "y": 4000 - 1030.0},
                         {"tif": str(tif), "x": 3000.0, "y": 4000 - 3060.0}])
     s = hunt.hull_shape(res)
-    assert 280 <= s.hull_m[0] <= 330 and s.beam_m[0] < hunt.WIDE_M
-    assert s.beam_m[1] >= hunt.WIDE_M
+    assert 280 <= s.hull_m[0] <= 330 and 55 <= s.beam_m[0] <= 75
+    assert s.beam_m[1] >= 1.6 * s.beam_m[0]
+
+
+def test_wide_cutoff_follows_length_band():
+    rows = [{"category": "AIS_VISIBLE", "hull_m": 150, "beam_m": 50 + i % 10} for i in range(200)]
+    rows += [{"category": "AIS_VISIBLE", "hull_m": 300, "beam_m": 70 + i % 10} for i in range(200)]
+    rows += [{"category": "AIS_UNMATCHED", "hull_m": 150, "beam_m": 75},   # wide for its band
+             {"category": "AIS_UNMATCHED", "hull_m": 300, "beam_m": 75}]   # normal for its band
+    out, cut = hunt.mark_wide(pd.DataFrame(rows))
+    assert out.wide.tolist()[-2:] == [True, False]

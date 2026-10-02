@@ -167,6 +167,37 @@ that, since GFW matches its detections against its full AIS archive. The UAE
 Navy operates from Fujairah, so naval exclusion (evidence ladder level 3) is
 still to be applied. No claim of intent is made at this level.
 
+### 4d. Gulf of Oman — two-hull (STS) candidates
+
+Same scenes and detections as §4c, with three changes so that two ships moored
+together are no longer merged into one: de-duplication only within 30 m; each
+hull's beam measured from the radar blob; and AIS counted per candidate
+(radar hulls within 1 km minus AIS identities within 1 km + 750 m). Evidence tiers:
+**A** two hulls ≤ 150 m apart (moored together), **B** 150–500 m apart, **C** one hull
+wider than the 99th-percentile beam of AIS-matched ships of its length band
+(cutoffs 92 / 130 / 144 m for < 200 / 200–280 / > 280 m).
+
+**191 STS candidates; 41 have at least one hull without AIS and no GFW encounter
+event (A 8, B 22, C 11).** GFW listed only 2 encounter events in the AOI for the
+whole period, so it cannot confirm or rule out these candidates.
+
+The 30 strongest (all of A, then B) were inspected as image chips:
+
+| Verdict | Count | Appearance |
+| ------- | ----- | ---------- |
+| Strong: two separate hulls | 4 | 08-14 14:16 (three hulls, 0 AIS), 09-22 02:06 (two hulls side by side, 0 AIS), 08-26 14:16 and 09-25 14:16 (two parallel tankers ~300 m apart, 0 AIS) |
+| Plausible | 9 | a large hull with a smaller target beside it, or two lobes along one blob |
+| One hull only | 12 | single hull with a sidelobe cross; the pair rule split one ship into two detections |
+| Not a vessel | 3 | two long straight streaks (08-14, 09-13) and a cluster of linear structures (09-01) |
+| Weak | 2 | small targets near clutter level (07-24) |
+
+**13 of 30 are plausible-or-better two-vessel AIS-unmatched candidates; 4 are
+strong.** Main failure: one long hull detected twice, which the pair rule reads
+as two ships. Fixes still to do: drop pairs whose two boxes are collinear and
+touching end to end, and drop positions that recur across scenes (streaks).
+No claim of intent is made. Optical confirmation (§5) is the next level of the
+evidence ladder.
+
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 
 *Pending* — one-scene cost and quality check first (`src/fetch_cdse.py`), then a

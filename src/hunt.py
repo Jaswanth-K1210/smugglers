@@ -12,7 +12,9 @@ Two outputs per region:
   STS candidates  — two ships close together, found three ways, because at 10 m a
                     rafted pair is often one blob:
                       pair       two detections <= 500 m apart (<= 150 m = rafted)
-                      oversized  one detection longer than any common tanker
+                      wide       one hull wider than any single ship: rafted
+                                 vessels lie side by side, so a pair is WIDER,
+                                 not longer — length alone flags single VLCCs
                       sts_class  the detector's own `sts` class
                     Each is checked by COUNTING: radar ships vs distinct AIS
                     identities within 1 km. One partner silent next to a
@@ -44,7 +46,7 @@ THIN = 0.3            # a scene with < 30 % of the region's median AIS cells is 
 DUP_M = 30            # closer than this is the same target detected twice
 RAFTED_M = 150        # centre spacing of two hulls moored side by side
 PAIR_M = 500          # the STS definition used in Phase 1
-OVERSIZE_M = 340      # longer than an Aframax/Suezmax/VLCC: probably two hulls
+WIDE_M = 85           # beam of the largest tankers is ~60 m; two side by side ~90-120 m
 COUNT_M = 1000        # radius for radar-vs-AIS counting (GFW grid is ~1 km)
 VESSEL_CONF, STS_CONF = 0.4, 0.25
 
@@ -139,8 +141,46 @@ def candidates(res, box):
     return un
 
 
+def hull_shape(res, k=30.0, half=40):
+    """Measured hull length and beam (m) for every detection, from the image.
+
+    Threshold at median + k MAD around the detection (the autolabel
+    calibration), take the bright component nearest the centre, and read its
+    principal axes: for a rectangle, side = sqrt(12 * variance). The detection
+    box is axis-aligned, so it cannot give the beam of a ship lying diagonally.
+    """
+    from scipy import ndimage
+    hull, beam = np.full(len(res), np.nan), np.full(len(res), np.nan)
+    for tif, g in res.groupby("tif"):
+        with rasterio.open(tif) as s:
+            px = s.res[0]
+            for i, r in g.iterrows():
+                row, col = s.index(r.x, r.y)
+                w = s.read(1, window=rasterio.windows.Window(col - half, row - half, 2 * half, 2 * half),
+                           boundless=True, fill_value=0).astype(float)
+                water = w[w > 0]
+                if water.size < 50:
+                    continue
+                med = np.median(water)
+                mad = max(np.median(np.abs(water - med)) * 1.4826, 1.0)
+                lab, n = ndimage.label(w > med + k * mad)
+                if n == 0:
+                    continue
+                cents = ndimage.center_of_mass(w, lab, range(1, n + 1))
+                best = 1 + int(np.argmin([(y - half) ** 2 + (x - half) ** 2 for y, x in cents]))
+                ys, xs = np.where(lab == best)
+                if len(ys) < 3:
+                    continue
+                ev = np.sort(np.linalg.eigvalsh(np.cov(np.vstack([ys, xs]) * px)))
+                beam[res.index.get_loc(i)] = np.sqrt(12 * max(ev[0], 0)) + px   # + one pixel
+                hull[res.index.get_loc(i)] = np.sqrt(12 * ev[1]) + px
+    out = res.copy()
+    out["hull_m"], out["beam_m"] = hull.round(1), beam.round(1)
+    return out
+
+
 def sts_candidates(res):
-    """Two-ships-together candidates from pairs, oversized blobs and the sts class.
+    """Two-ships-together candidates from pairs, over-wide hulls and the sts class.
 
     One row per candidate, merged when two lines of evidence point at the same
     spot (<= RAFTED_M) in the same scene.
@@ -159,10 +199,12 @@ def sts_candidates(res):
                              "evidence": "pair" if d[j - i - 1] > RAFTED_M else "rafted",
                              "spacing_m": round(float(d[j - i - 1])),
                              "length_m": max(a.length_m, b.length_m), "conf": min(a.conf, b.conf)})
-        for _, r in g[(g.cls == "sts") | (g.length_m > OVERSIZE_M)].iterrows():
+        wide = g.beam_m >= WIDE_M if "beam_m" in g else False
+        for _, r in g[(g.cls == "sts") | wide].iterrows():
             rows.append({"scene": scene, "time": r.time, "tif": r.tif, "lat": r.lat, "lon": r.lon,
                          "x": r.x, "y": r.y, "spacing_m": 0, "length_m": r.length_m, "conf": r.conf,
-                         "evidence": "sts_class" if r.cls == "sts" else "oversized"})
+                         "beam_m": r.get("beam_m", np.nan),
+                         "evidence": "sts_class" if r.cls == "sts" else "wide"})
     c = pd.DataFrame(rows)
     if c.empty:
         return c
@@ -192,7 +234,7 @@ def count_identities(c, res, ais, radius_m=COUNT_M, window_h=1):
     for _, r in c.iterrows():
         g = res[res.scene == r.scene]
         n_radar = int((near(r.lat, r.lon, g.lat, g.lon) <= radius_m).sum())
-        n_radar = max(n_radar, 2)                     # an oversized blob is two hulls
+        n_radar = max(n_radar, 2)                     # a wide blob is two hulls
         # AIS radius padded by half a GFW cell diagonal: a cell's reported corner
         # can sit ~0.75 km from the ship. Padding only adds AIS, so `missing`
         # errs low — conservative for a dark claim.
@@ -253,7 +295,8 @@ def chip_sheet(df, png, title, n=30):
     plt.close(fig)
 
 
-def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None):
+def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, reuse=False):
+    """reuse=True skips detection and loads detections.csv from a previous run."""
     box = REGIONS[region]
     weights = Path(weights or "models/bench_rtdetr-l/weights/best.pt")
     if not weights.exists():
@@ -261,8 +304,12 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None):
     out = Path(out or f"/content/drive/MyDrive/darksts/hunt_{region}")
     out.mkdir(parents=True, exist_ok=True)
 
-    clean = detect_region(box, start, end, weights, Path(f"data/sar_{region}"))
-    clean.to_csv(out / "detections.csv", index=False)       # survives a crash below
+    if reuse and (out / "detections.csv").exists():
+        clean = pd.read_csv(out / "detections.csv", parse_dates=["time"])
+        print(f"reusing {len(clean)} detections from {out / 'detections.csv'}")
+    else:
+        clean = detect_region(box, start, end, weights, Path(f"data/sar_{region}"))
+        clean.to_csv(out / "detections.csv", index=False)   # survives a crash below
     res, bad, ais = check_ais(clean, box)
     print(f"\nexcluded {len(bad)} scene(s) with missing/thin GFW AIS")
 
@@ -278,7 +325,15 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None):
                              f"\n{r.lat:.3f}N {r.lon:.3f}E ~{r.length_m:.0f} m"
                              f"{' (recurring)' if r.scenes_here > 1 else ''}")
 
-    # STS
+    # STS — hull beam measured from the image; calibration printed so the 85 m
+    # threshold can be checked against ships whose single identity is known
+    res = hull_shape(res)
+    one = res[res.category != dark_sts.AIS_UNMATCHED]
+    big = one[one.hull_m >= 200].beam_m.dropna()
+    if len(big):
+        print(f"beam of AIS-matched ships >=200 m: median {big.median():.0f} m, "
+              f"p90 {big.quantile(.9):.0f} m, p99 {big.quantile(.99):.0f} m (threshold {WIDE_M} m)")
+    res.drop(columns=["mmsis"]).to_csv(out / "all_checked.csv", index=False)
     sts = sts_candidates(res)
     if len(sts):
         sts = count_identities(sts, res, ais)
@@ -288,15 +343,16 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None):
             print(f"   GFW encounter check skipped: {e}")
             sts["gfw_encounter"] = False
         sts["dark_sts"] = (sts.missing >= 1) & ~sts.gfw_encounter
-        # Hulls touching (rafted / one oversized blob / sts class) is a transfer;
+        # Hulls touching (rafted / one over-wide blob / sts class) is a transfer;
         # 150-500 m apart in a crowded anchorage may just be neighbours.
-        sts["touching"] = sts.evidence.str.contains("rafted|oversized|sts_class")
+        sts["touching"] = sts.evidence.str.contains("rafted|wide|sts_class")
         sts = sts.sort_values(["dark_sts", "touching", "missing", "conf"], ascending=False)
         sts.to_csv(out / "sts_candidates.csv", index=False)
         chip_sheet(sts, out / "sts_chips.png",
                    lambda r: f"{str(r.time)[:16]} {r.evidence}\n"
                              f"radar {r.n_radar} / AIS {r.n_ais} -> {r.missing} silent"
-                             f"{'  GFW-enc' if r.gfw_encounter else ''}  ~{r.length_m:.0f} m")
+                             f"{'  GFW-enc' if r.gfw_encounter else ''}  ~{r.length_m:.0f} m"
+                             f"{f' beam {r.beam_m:.0f} m' if r.get('beam_m') == r.get('beam_m') else ''}")
 
     print(f"\n{region}: {len(res)} ships checked | "
           f"{(res.category != dark_sts.AIS_UNMATCHED).sum()} AIS-matched | "

@@ -216,7 +216,7 @@ def mark_wide(res, q=0.99, min_n=50):
     return out, cut
 
 
-def one_hull(tif, a, b, k=30.0, margin=20, along=0.8):
+def one_hull(tif, a, b, k=30.0, margin=20, along=0.8, bridge=3):
     """True when two pair detections are one radar object, not two ships.
 
     The main tier-B false alarm: one long hull, or a hull and its sidelobe
@@ -237,7 +237,10 @@ def one_hull(tif, a, b, k=30.0, margin=20, along=0.8):
     if water.size < 50:
         return False
     med = np.median(water)
-    lab, n = ndimage.label(w > med + k * max(np.median(np.abs(water - med)) * 1.4826, 1.0))
+    bright = w > med + k * max(np.median(np.abs(water - med)) * 1.4826, 1.0)
+    # A big hull images as a chain of bright scatterers with dark gaps; bridge
+    # gaps up to ~2 * bridge px so one hull stays one component.
+    lab, n = ndimage.label(ndimage.binary_dilation(bright, iterations=bridge))
 
     def comp(r, c):                                   # component at or next to the centre
         win = lab[max(r - 3, 0):r + 4, max(c - 3, 0):c + 4]

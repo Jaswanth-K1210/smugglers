@@ -103,6 +103,8 @@ def test_one_long_hull_is_not_a_pair(tmp_path):
     img[250:256, 50:80] = 5000          # two separate hulls 300 m apart
     img[250:256, 110:140] = 5000
     img[350:353, 50:110] = 5000         # bright hull + sidelobe line, 400 m
+    for c in range(200, 240, 8):        # 400 m hull imaged as a chain of scatterers
+        img[52:56, c:c + 4] = 5000
     tif = tmp_path / "s.tif"
     t = from_origin(0, 4000, 10, 10)
     with rasterio.open(tif, "w", driver="GTiff", height=400, width=400, count=1, dtype="uint16",
@@ -117,3 +119,4 @@ def test_one_long_hull_is_not_a_pair(tmp_path):
     assert not hunt.one_hull(tif, pt(153, 65), pt(159, 65))    # side by side
     assert not hunt.one_hull(tif, pt(253, 65), pt(253, 125))   # two hulls
     assert hunt.one_hull(tif, pt(351, 52), pt(351, 105))       # 530 m apart on one streak
+    assert hunt.one_hull(tif, pt(54, 201), pt(54, 234))        # dotted hull, 330 m

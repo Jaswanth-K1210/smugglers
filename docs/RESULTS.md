@@ -198,6 +198,45 @@ touching end to end, and drop positions that recur across scenes (streaks).
 No claim of intent is made. Optical confirmation (Sentinel-2 / Landsat) is the next level of the
 evidence ladder.
 
+### 4e. Gulf of Laconia, Greece (2026-07-01 → 09-26)
+
+Same detector and pipeline as §4c/§4d, with two fixes: GFW requests back off on
+429 / 5xx (the first run lost 22 of 23 GFW radar checks to rate limiting), and the
+over-wide test is disabled for any length band with fewer than 50 AIS-matched
+ships (a p99 from a handful of ships is just the widest one seen). 63 scenes, 32
+with ships after the land / length filters; no scene excluded for thin AIS.
+
+**123 ships checked → 58 AIS-matched, 65 AIS-unmatched (25 also unmatched in
+GFW's own Sentinel-1 detections).** The anchorage is small, so there are too few
+matched ships to calibrate hull width: no tier C candidates here.
+
+The top 30 single AIS-unmatched (by recurrence, GFW agreement, confidence):
+
+| Verdict | Count | Notes |
+| ------- | ----- | ----- |
+| Strong vessel-like target | 20 | bright hulls with sidelobe crosses, 124–247 m; 13 of them GFW-corroborated |
+| Plausible | 5 | compact targets 71–105 m, or two short parallel hulls |
+| Weak / clutter | 5 | 46–75 m, near the noise level |
+
+One position (36.599 N 22.896 E, ~260–300 m) is unmatched in 6–7 scenes: a fixed
+or long-term-moored object, already flagged as recurring and ranked last.
+
+**STS: 4 candidates, all tier A (two hulls ≤ 150 m apart); 2 with no AIS on
+either hull**, both in the 2026-09-03 16:30 scene:
+
+| Position | Hull spacing | Length | Radar / AIS |
+| -------- | ------------ | ------ | ----------- |
+| 36.545 N 22.638 E | 44 m | ~176 m | 2 / 0 |
+| 36.444 N 22.658 E | 74 m | ~214 m | 2 / 0 |
+
+Both chips show two short parallel hulls side by side, the expected look of a
+rafted STS pair at 10 m. Caveat: that same scene holds ~14 of the 65 unmatched
+ships, clustered near 22.63–22.66 E, although GFW returned normal AIS volume for
+it (121 cells). Corroboration from a second pass or optical imagery is needed
+before these two are reported further. The Gulf of Laconia is a designated STS
+transfer area, so AIS-visible transfers here are routine; the two above are of
+interest only because neither hull has AIS.
+
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 
 *Pending* — one-scene cost and quality check first (`src/fetch_cdse.py`), then a

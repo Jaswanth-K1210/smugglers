@@ -120,3 +120,4 @@ def test_one_long_hull_is_not_a_pair(tmp_path):
     assert not hunt.one_hull(tif, pt(253, 65), pt(253, 125))   # two hulls
     assert hunt.one_hull(tif, pt(351, 52), pt(351, 105))       # 530 m apart on one streak
     assert hunt.one_hull(tif, pt(54, 201), pt(54, 234))        # dotted hull, 330 m
+    assert hunt.one_hull(tif, pt(253, 65), pt(253, 95))        # partner on empty sea

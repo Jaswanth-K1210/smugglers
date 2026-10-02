@@ -220,7 +220,8 @@ def one_hull(tif, a, b, k=30.0, margin=20, along=0.8, bridge=3):
     """True when two pair detections are one radar object, not two ships.
 
     The main tier-B false alarm: one long hull, or a hull and its sidelobe
-    cross, detected twice. Both detections then sit on the same bright
+    cross, detected twice. A detection with no bright hull under it (a faint
+    sidelobe arm or azimuth ghost) is not a second ship either. Both detections then sit on the same bright
     component (threshold as in hull_shape). Further apart than RAFTED_M that is
     never two hulls. Closer, a rafted pair is also one component, so it is one
     hull only when the step from a to b runs along the component's long axis
@@ -248,7 +249,9 @@ def one_hull(tif, a, b, k=30.0, margin=20, along=0.8, bridge=3):
         return int(np.bincount(ids).argmax()) if ids.size else 0
 
     la, lb = comp(ra - r0, ca - c0), comp(rb - r0, cb - c0)
-    if la == 0 or la != lb:
+    if la == 0 or lb == 0:          # no hull under a detection: sidelobe arm or ghost
+        return True
+    if la != lb:
         return False
     if near(a.lat, a.lon, b.lat, b.lon) > RAFTED_M:
         return True

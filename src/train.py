@@ -264,3 +264,49 @@ if __name__ == "__main__":
     # are defined below it. Bare call, not sys.exit(0 if ... else 1) — main can
     # return a DataFrame, and a DataFrame in boolean context raises.
     main()
+
+
+def compare(weights: dict, dataset: Path = DATASET, skagen_tiles: Path = None, imgsz: int = 1024):
+    """mAP50 of several models on the SAME held-out tiles, split by region.
+
+    `skagen_tiles` is the folder of the original Skagen tiles; any val tile not
+    in it came from the new regions (AIS-confirmed pseudo-labels, so ships the
+    detector never found are unlabelled there and precision reads low).
+    """
+    from ultralytics import YOLO
+
+    val = sorted((dataset / "val" / "images").glob("*.png"))
+    skagen = {p.name for p in (skagen_tiles / "images").glob("*.png")} if skagen_tiles else set()
+    subsets = {"all": val}
+    if skagen:
+        subsets["skagen"] = [p for p in val if p.name in skagen]
+        subsets["new regions"] = [p for p in val if p.name not in skagen]
+
+    ymls = {}
+    for name, imgs in subsets.items():
+        if not imgs:
+            continue
+        d = dataset.parent / f"compare_{name.replace(' ', '_')}"
+        for kind in ("images", "labels"):
+            shutil.rmtree(d / "val" / kind, ignore_errors=True)
+            (d / "val" / kind).mkdir(parents=True)
+        for p in imgs:
+            shutil.copy(p, d / "val" / "images" / p.name)
+            shutil.copy(dataset / "val" / "labels" / f"{p.stem}.txt", d / "val" / "labels" / f"{p.stem}.txt")
+        ymls[name] = d / "data.yaml"
+        ymls[name].write_text(yaml.safe_dump({"path": str(d.resolve()), "train": "val/images",
+                                              "val": "val/images",
+                                              "names": {i: n for i, n in enumerate(NAMES)}}))
+
+    rows = []
+    for model, w in weights.items():
+        for name, yml in ymls.items():
+            m = YOLO(str(w)).val(data=str(yml), imgsz=imgsz, batch=8, plots=False, verbose=False)
+            ap = dict(zip(m.box.ap_class_index.tolist(), m.box.ap50.tolist()))
+            rows.append({"model": model, "tiles": name, "n": len(subsets[name]),
+                         "mAP50": round(m.box.map50, 3), "vessel": round(ap.get(0, float("nan")), 3),
+                         "sts": round(ap.get(1, float("nan")), 3), "recall": round(m.box.mr, 3)})
+    import pandas as pd
+    table = pd.DataFrame(rows)
+    print(table.to_string(index=False))
+    return table

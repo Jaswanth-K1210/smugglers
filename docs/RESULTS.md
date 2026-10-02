@@ -195,7 +195,7 @@ The 30 strongest (all of A, then B) were inspected as image chips:
 strong.** Main failure: one long hull detected twice, which the pair rule reads
 as two ships. Fixes still to do: drop pairs whose two boxes are collinear and
 touching end to end, and drop positions that recur across scenes (streaks).
-No claim of intent is made. Optical confirmation (§5) is the next level of the
+No claim of intent is made. Optical confirmation (Sentinel-2 / Landsat) is the next level of the
 evidence ladder.
 
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV

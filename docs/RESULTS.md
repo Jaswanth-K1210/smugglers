@@ -237,6 +237,27 @@ before these two are reported further. The Gulf of Laconia is a designated STS
 transfer area, so AIS-visible transfers here are routine; the two above are of
 interest only because neither hull has AIS.
 
+### 4f. Optical cross-check (Sentinel-2) of the STS candidates
+
+`src/optical.py`: for each AIS-unmatched tier A/B candidate (top 10 Oman, both
+Laconia), the nearest-in-time Sentinel-2 L2A image clear over the spot
+(SCL cloud / shadow / haze ≤ 20 % of a 1.5 km chip), within ±5 days.
+
+| Region | Candidates | Nearest clear image | Pair visible at the spot |
+| ------ | ---------- | ------------------- | ------------------------ |
+| Oman | 10 | +5 h to −91 h (median ~40 h) | 0 |
+| Laconia | 2 | +17 h | 0 |
+
+The closest match in time (25.231 N 56.590 E, +5 h) is at a swath edge with
+strong sun glint; no hull is visible. Other ships appear within a few hundred
+metres in several chips, as expected in a busy anchorage, but not at the
+candidate positions. **Result: no optical confirmation, and no contradiction.**
+Sentinel-2 passes at ~06:46 UTC (Oman) / ~09:20 UTC (Laconia), never at the
+radar time, and moored transfers typically last hours to a day or two, so an
+empty sea hours later is the expected outcome either way. Same-time optical
+confirmation needs a sensor passing close to the radar time (commercial
+imagery, or Landsat/Sentinel-2 on a lucky overlap) and is left as future work.
+
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 
 *Pending* — one-scene cost and quality check first (`src/fetch_cdse.py`), then a

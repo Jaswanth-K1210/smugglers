@@ -85,3 +85,9 @@ def test_wide_needs_enough_matched_ships():
            [{"category": "AIS_UNMATCHED", "hull_m": 250, "beam_m": 190}]
     out, cut = hunt.mark_wide(pd.DataFrame(rows))
     assert not out.wide.any()
+
+
+def test_no_gfw_encounters():
+    c = pd.DataFrame([{"lat": 25.0, "lon": 56.6, "time": T}])
+    enc = pd.DataFrame(columns=["lat", "lon", "start", "end"])
+    assert hunt.mark_encounters(c, enc).gfw_encounter.tolist() == [False]

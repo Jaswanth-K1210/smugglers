@@ -286,6 +286,7 @@ def gfw_encounters(start, end, box):
 
 def mark_encounters(c, enc, radius_m=2000, pad_h=2):
     """True where an AIS-visible GFW encounter matches the candidate in space and time."""
+    enc = enc.assign(start=pd.to_datetime(enc.start), end=pd.to_datetime(enc.end))   # empty -> object dtype
     hit = []
     for _, r in c.iterrows():
         t = pd.Timestamp(r.time)
@@ -330,7 +331,7 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, re
         clean = pd.read_csv(out / "detections.csv", parse_dates=["time"])
         print(f"reusing {len(clean)} detections from {out / 'detections.csv'}")
     else:
-        clean = detect_region(box, start, end, weights, Path(f"data/sar_{region}"))
+        clean = detect_region(box, start, end, weights, out / "scenes")   # on Drive: reuse survives a reset
         clean.to_csv(out / "detections.csv", index=False)   # survives a crash below
     res, bad, ais = check_ais(clean, box)
     print(f"\nexcluded {len(bad)} scene(s) with missing/thin GFW AIS")
@@ -374,7 +375,7 @@ def run(region, start="2026-07-01", end="2026-09-26", weights=None, out=None, re
                    lambda r: f"[{r.tier}] {str(r.time)[:16]} {r.evidence}\n"
                              f"radar {r.n_radar} / AIS {r.n_ais} -> {r.missing} silent"
                              f"{'  GFW-enc' if r.gfw_encounter else ''}  ~{r.length_m:.0f} m"
-                             f"{f' beam {r.beam_m:.0f} m' if r.get('beam_m') == r.get('beam_m') else ''}")
+                             f"{f' beam {r.beam_m:.0f} m' if pd.notna(r.get('beam_m')) else ''}")
 
     print(f"\n{region}: {len(res)} ships checked | "
           f"{(res.category != dark_sts.AIS_UNMATCHED).sum()} AIS-matched | "

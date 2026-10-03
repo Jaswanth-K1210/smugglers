@@ -19,3 +19,4 @@ runs/
 !outputs/events.geojson
 !outputs/events.csv
 __MACOSX/
+!webapp/frontend/public/*.jpg

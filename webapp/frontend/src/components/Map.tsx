@@ -1,83 +1,43 @@
-import React, { useEffect, useState } from 'react'
-import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet'
-import L from 'leaflet'
-import { useDashboardStore, STSEvent } from '../store/dashboardStore'
+import React from 'react'
+import { MapContainer, TileLayer, CircleMarker, Tooltip } from 'react-leaflet'
+import { useDashboardStore } from '../store/dashboardStore'
+import { STATUS, STATUS_ORDER } from '../status'
 
 const MapComponent: React.FC = () => {
   const events = useDashboardStore((s) => s.getFilteredEvents())
-  const selectedEvent = useDashboardStore((s) => s.selectedEvent)
-
-  const getColor = (status: string) => {
-    switch (status) {
-      case 'AIS_VISIBLE':
-        return '#22c55e'
-      case 'AIS_PARTIAL':
-        return '#eab308'
-      case 'AIS_UNMATCHED':
-        return '#ef4444'
-      default:
-        return '#0ea5e9'
-    }
-  }
-
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'AIS_VISIBLE':
-        return 'AIS Visible'
-      case 'AIS_PARTIAL':
-        return 'Partially Visible'
-      case 'AIS_UNMATCHED':
-        return 'Dark Candidate'
-      default:
-        return status
-    }
-  }
-
-  const defaultCenter: [number, number] = [57.75, 10.9]
+  const selected = useDashboardStore((s) => s.selectedEvent)
+  const setSelectedEvent = useDashboardStore((s) => s.setSelectedEvent)
+  const valid = events.filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lon))
+  const center: [number, number] = valid.length ? [valid[0].lat, valid[0].lon] : [57.75, 10.9]
 
   return (
-    <div className="glass-effect card-shadow rounded-lg overflow-hidden h-full min-h-[600px]">
-      <MapContainer
-        center={defaultCenter}
-        zoom={6}
-        style={{ height: '100%', width: '100%' }}
-        className="z-0"
-      >
+    <section className="panel relative overflow-hidden">
+      <MapContainer center={center} zoom={7} style={{ height: 480, width: '100%' }} className="z-0">
         <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png"
-          attribution='&copy; OpenStreetMap contributors'
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+          attribution="Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors"
+          maxZoom={13}
         />
-
-        {events.map((event) => (
+        {valid.map((e) => (
           <CircleMarker
-            key={event.id}
-            center={[event.lat, event.lon]}
-            radius={selectedEvent?.id === event.id ? 12 : 8}
-            fillColor={getColor(event.status)}
-            color={getColor(event.status)}
-            weight={selectedEvent?.id === event.id ? 3 : 2}
-            opacity={1}
-            fillOpacity={0.8}
-            className="transition-all"
+            key={e.id}
+            center={[e.lat, e.lon]}
+            radius={selected?.id === e.id ? 10 : 7}
+            pathOptions={{ color: '#070B0A', weight: 2, fillColor: STATUS[e.status]?.color ?? '#D3E2DA', fillOpacity: 1 }}
+            eventHandlers={{ click: () => setSelectedEvent(e) }}
           >
-            <Popup>
-              <div className="text-sm">
-                <p className="font-semibold mb-1">{getStatusLabel(event.status)}</p>
-                <p className="text-xs text-gray-600">
-                  {new Date(event.timestamp).toLocaleDateString()}
-                </p>
-                <p className="text-xs text-gray-600">
-                  Distance: {event.distance}m
-                </p>
-                <p className="text-xs text-gray-600">
-                  Confidence: {(event.confidence * 100).toFixed(1)}%
-                </p>
-              </div>
-            </Popup>
+            <Tooltip>{STATUS[e.status]?.label}, {Math.round(e.confidence * 100)}% confidence</Tooltip>
           </CircleMarker>
         ))}
       </MapContainer>
-    </div>
+      <ul className="absolute bottom-3 left-3 z-[400] space-y-1 rounded-md border border-rule bg-surface/95 px-3 py-2 font-mono text-xs">
+        {STATUS_ORDER.map((k) => (
+          <li key={k} className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS[k].color }} />{STATUS[k].label}
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

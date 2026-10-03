@@ -1,118 +1,74 @@
 import React, { useState } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
-import { ChevronDown } from 'lucide-react'
-import { formatDistanceToNow, parseISO } from 'date-fns'
+import { STATUS } from '../status'
+
+export const StatusTag: React.FC<{ status: keyof typeof STATUS }> = ({ status }) => (
+  <span className="inline-flex items-center gap-2 whitespace-nowrap">
+    <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS[status]?.color }} />
+    {STATUS[status]?.label ?? status}
+  </span>
+)
+
+export const formatTime = (ts: string) => {
+  const d = new Date(ts)
+  return isNaN(d.getTime()) ? ts : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }) + ' UTC'
+}
 
 export const EventTable: React.FC = () => {
   const events = useDashboardStore((s) => s.getFilteredEvents())
   const setSelectedEvent = useDashboardStore((s) => s.setSelectedEvent)
   const [sortBy, setSortBy] = useState<'confidence' | 'date'>('confidence')
 
-  const sortedEvents = [...events].sort((a, b) => {
-    if (sortBy === 'confidence') {
-      return b.confidence - a.confidence
-    }
-    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  }).slice(0, 20)
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'AIS_VISIBLE':
-        return 'badge-ais-visible'
-      case 'AIS_PARTIAL':
-        return 'badge-partial'
-      case 'AIS_UNMATCHED':
-        return 'badge-dark'
-      default:
-        return 'badge-ais-visible'
-    }
-  }
-
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'AIS_VISIBLE':
-        return 'Visible'
-      case 'AIS_PARTIAL':
-        return 'Partial'
-      case 'AIS_UNMATCHED':
-        return 'Dark'
-      default:
-        return status
-    }
-  }
+  const rows = [...events].sort((a, b) =>
+    sortBy === 'confidence'
+      ? (b.confidence ?? 0) - (a.confidence ?? 0)
+      : (new Date(b.timestamp).getTime() || 0) - (new Date(a.timestamp).getTime() || 0)
+  ).slice(0, 50)
 
   return (
-    <div className="glass-effect card-shadow rounded-lg overflow-hidden">
-      <div className="p-4 border-b border-slate-700/50">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Recent Events</h2>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
-            className="input-field text-xs py-1"
-          >
-            <option value="confidence">Sort by Confidence</option>
-            <option value="date">Sort by Date</option>
+    <section className="panel overflow-hidden">
+      <div className="flex items-center justify-between gap-4 border-b border-rule px-5 py-4">
+        <h2 className="panel-title">Candidates <span className="font-sans text-sm font-normal text-ink-2">{events.length}</span></h2>
+        <label className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink-2">
+          Sort by
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as any)} className="field w-auto py-1">
+            <option value="confidence">Confidence</option>
+            <option value="date">Newest</option>
           </select>
-        </div>
+        </label>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-700/50 bg-slate-800/30">
-              <th className="px-4 py-3 text-left font-semibold text-slate-300">Time</th>
-              <th className="px-4 py-3 text-left font-semibold text-slate-300">Status</th>
-              <th className="px-4 py-3 text-left font-semibold text-slate-300">Region</th>
-              <th className="px-4 py-3 text-left font-semibold text-slate-300">Distance</th>
-              <th className="px-4 py-3 text-left font-semibold text-slate-300">Confidence</th>
-              <th className="px-4 py-3 text-left font-semibold text-slate-300">GFW</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedEvents.map((event) => (
-              <tr
-                key={event.id}
-                onClick={() => setSelectedEvent(event)}
-                className="border-b border-slate-700/20 hover:bg-slate-800/30 cursor-pointer transition-colors"
-              >
-                <td className="px-4 py-3 text-slate-300">
-                  {formatDistanceToNow(parseISO(event.timestamp), { addSuffix: true })}
-                </td>
-                <td className="px-4 py-3">
-                  <span className={getStatusColor(event.status)}>
-                    {getStatusLabel(event.status)}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-slate-300">{event.region}</td>
-                <td className="px-4 py-3 text-slate-300">{event.distance}m</td>
-                <td className="px-4 py-3">
-                  <span className="inline-block w-16 h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                    <span
-                      className="h-full bg-gradient-to-r from-ocean-400 to-ocean-600 block"
-                      style={{ width: `${event.confidence * 100}%` }}
-                    ></span>
-                  </span>
-                  <span className="ml-2 text-slate-400">{(event.confidence * 100).toFixed(0)}%</span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                    event.gfw_match ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-400'
-                  }`}>
-                    {event.gfw_match ? 'Match' : 'None'}
-                  </span>
-                </td>
+      {rows.length ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-paper font-mono text-[11px] uppercase tracking-wider text-ink-2">
+              <tr>
+                {['Image time', 'AIS evidence', 'Region', 'Length', 'Confidence', 'GFW'].map((h) => (
+                  <th key={h} className="whitespace-nowrap px-5 py-2.5 font-medium">{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {sortedEvents.length === 0 && (
-        <div className="p-8 text-center text-slate-400">
-          <p>No events found with current filters</p>
+            </thead>
+            <tbody>
+              {rows.map((e) => (
+                <tr key={e.id} className="cursor-pointer border-t border-rule hover:bg-shoal/60" onClick={() => setSelectedEvent(e)}>
+                  <td className="whitespace-nowrap px-5 py-3">
+                    <button className="text-left text-signal hover:underline" onClick={() => setSelectedEvent(e)}>{formatTime(e.timestamp)}</button>
+                  </td>
+                  <td className="px-5 py-3"><StatusTag status={e.status} /></td>
+                  <td className="whitespace-nowrap px-5 py-3">{e.region}</td>
+                  <td className="px-5 py-3">{e.length_estimate} m</td>
+                  <td className="px-5 py-3">{Math.round(e.confidence * 100)}%</td>
+                  <td className="px-5 py-3 text-ink-2">{e.gfw_match ? 'Encounter' : 'None'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+      ) : (
+        <p className="px-5 py-10 text-center text-ink-2">
+          {useDashboardStore.getState().events.length ? 'No candidates match these filters. Clear filters to see all.' : 'No candidates published yet.'}
+        </p>
       )}
-    </div>
+    </section>
   )
 }

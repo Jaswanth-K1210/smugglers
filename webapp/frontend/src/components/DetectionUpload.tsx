@@ -1,7 +1,5 @@
 import React, { useState } from 'react'
 import { apiService } from '../services/api'
-import { Upload, CheckCircle, AlertCircle } from 'lucide-react'
-import { LoadingSpinner } from './Loading'
 
 export const DetectionUpload: React.FC = () => {
   const [file, setFile] = useState<File | null>(null)
@@ -9,89 +7,46 @@ export const DetectionUpload: React.FC = () => {
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0]
-    if (selectedFile) {
-      setFile(selectedFile)
-      setError(null)
-      setResult(null)
-    }
-  }
-
-  const handleUpload = async () => {
+  const run = async () => {
     if (!file) return
-
+    setLoading(true)
+    setError(null)
     try {
-      setLoading(true)
-      const result = await apiService.detectShip(file)
-      setResult(result)
+      setResult(await apiService.detectShip(file))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Upload failed')
+      setError(err instanceof Error ? err.message : 'Detection failed. Check the file and try again.')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="glass-effect card-shadow rounded-lg p-6 space-y-4">
-      <h3 className="text-lg font-semibold">Live Detection</h3>
-      <p className="text-sm text-slate-400">
-        Upload a Sentinel-1 SAR tile to run the detector on CPU
-      </p>
-
-      <div className="border-2 border-dashed border-slate-700 rounded-lg p-6 text-center hover:border-ocean-500 transition-colors cursor-pointer"
-        onClick={() => document.getElementById('file-input')?.click()}
-      >
-        <Upload className="w-8 h-8 mx-auto mb-2 text-slate-500" />
-        <p className="text-sm text-slate-400">
-          {file ? file.name : 'Click or drag to upload SAR image'}
-        </p>
-        <input
-          id="file-input"
-          type="file"
-          accept=".tif,.tiff,.jp2"
-          onChange={handleFileChange}
-          className="hidden"
-        />
+    <section className="panel space-y-4 p-5">
+      <div>
+        <h2 className="panel-title">Run detection</h2>
+        <p className="mt-1 text-sm text-ink-2">Upload one Sentinel-1 tile. The detector runs on CPU in a few seconds.</p>
       </div>
 
-      <button
-        onClick={handleUpload}
-        disabled={!file || loading}
-        className="btn-primary w-full disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-      >
-        {loading ? (
-          <>
-            <LoadingSpinner size="sm" />
-            Processing...
-          </>
-        ) : (
-          'Run Detection'
-        )}
+      <label className="block cursor-pointer rounded-md border border-dashed border-rule bg-paper px-4 py-5 text-center text-sm hover:border-ink-3">
+        <span className="font-medium text-signal">{file ? file.name : 'Choose a tile'}</span>
+        <span className="mt-1 block text-ink-3">GeoTIFF, JP2, PNG or JPEG</span>
+        <input type="file" accept=".tif,.tiff,.jp2,.png,.jpg,.jpeg" className="sr-only"
+          onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); setError(null) }} />
+      </label>
+
+      <button onClick={run} disabled={!file || loading} className="btn-primary w-full">
+        {loading ? 'Running detection…' : 'Run detection'}
       </button>
 
-      {error && (
-        <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center gap-2 text-red-300 text-sm">
-          <AlertCircle className="w-4 h-4" />
-          {error}
-        </div>
-      )}
+      {error && <p role="alert" className="text-sm text-unmatched">{error}</p>}
 
       {result && (
-        <div className="p-3 bg-green-500/20 border border-green-500/30 rounded-lg space-y-2">
-          <div className="flex items-center gap-2 text-green-300 text-sm font-medium">
-            <CheckCircle className="w-4 h-4" />
-            Detection Complete
-          </div>
-          <div className="text-xs text-green-200 space-y-1">
-            <p>Vessels Detected: <span className="font-semibold">{result.vessels_count || 0}</span></p>
-            <p>STS Events: <span className="font-semibold">{result.sts_count || 0}</span></p>
-            {result.processing_time && (
-              <p>Processing Time: <span className="font-semibold">{result.processing_time.toFixed(2)}s</span></p>
-            )}
-          </div>
-        </div>
+        <dl className="grid grid-cols-3 gap-2 border-t border-rule pt-4 text-sm">
+          <div><dt className="text-ink-2">Vessels</dt><dd className="font-mono text-xl font-semibold">{result.vessels_count ?? 0}</dd></div>
+          <div><dt className="text-ink-2">Pairs</dt><dd className="font-mono text-xl font-semibold">{result.sts_count ?? 0}</dd></div>
+          <div><dt className="text-ink-2">Time</dt><dd className="font-mono text-xl font-semibold">{Number(result.processing_time ?? 0).toFixed(1)}s</dd></div>
+        </dl>
       )}
-    </div>
+    </section>
   )
 }

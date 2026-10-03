@@ -1,142 +1,50 @@
 import React from 'react'
-import {
-  BarChart,
-  Bar,
-  LineChart,
-  Line,
-  PieChart,
-  Pie,
-  Cell,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { useDashboardStore } from '../store/dashboardStore'
 
-const ChartTooltip = (props: any) => {
-  const { active, payload } = props
-  if (active && payload && payload.length) {
-    return (
-      <div className="glass-effect rounded-lg p-2 border border-ocean-500/30">
-        <p className="text-xs text-slate-200">{payload[0].name}</p>
-        <p className="text-sm font-semibold text-ocean-300">{payload[0].value}</p>
-      </div>
-    )
-  }
-  return null
-}
-
-export const StatusChart: React.FC = () => {
-  const events = useDashboardStore((s) => s.events)
-
-  const data = [
-    {
-      name: 'AIS Visible',
-      value: events.filter((e) => e.status === 'AIS_VISIBLE').length,
-      fill: '#22c55e',
-    },
-    {
-      name: 'Partial',
-      value: events.filter((e) => e.status === 'AIS_PARTIAL').length,
-      fill: '#eab308',
-    },
-    {
-      name: 'Dark Candidates',
-      value: events.filter((e) => e.status === 'AIS_UNMATCHED').length,
-      fill: '#ef4444',
-    },
-  ]
-
-  return (
-    <div className="glass-effect card-shadow rounded-lg p-4">
-      <h3 className="text-lg font-semibold mb-4">Status Distribution</h3>
-      <ResponsiveContainer width="100%" height={300}>
-        <PieChart>
-          <Pie
-            data={data}
-            cx="50%"
-            cy="50%"
-            labelLine={false}
-            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-            outerRadius={80}
-            fill="#0ea5e9"
-            dataKey="value"
-          >
-            {data.map((entry, index) => (
-              <Cell key={`cell-${index}`} fill={entry.fill} />
-            ))}
-          </Pie>
-          <Tooltip content={<ChartTooltip />} />
-        </PieChart>
-      </ResponsiveContainer>
+const Tip = ({ active, payload, label }: any) =>
+  active && payload?.length ? (
+    <div className="rounded-md border border-rule bg-surface px-3 py-2 text-sm shadow-sm">
+      <p className="text-ink-2">{label}</p>
+      <p className="font-medium text-ink">{payload[0].value} candidates</p>
     </div>
-  )
-}
+  ) : null
+
+const Histogram: React.FC<{ title: string; data: { x: string; n: number }[] }> = ({ title, data }) => (
+  <section className="panel p-5">
+    <h2 className="panel-title mb-4">{title}</h2>
+    <ResponsiveContainer width="100%" height={180}>
+      <BarChart data={data} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+        <CartesianGrid vertical={false} stroke="#16221E" />
+        <XAxis dataKey="x" tickLine={false} axisLine={{ stroke: '#1D2B26' }} tick={{ fill: '#8BA197', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+        <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: '#8BA197', fontSize: 11, fontFamily: 'JetBrains Mono' }} />
+        <Tooltip content={<Tip />} cursor={{ fill: '#12201B' }} />
+        <Bar dataKey="n" fill="#1C93CF" radius={[4, 4, 0, 0]} maxBarSize={36} />
+      </BarChart>
+    </ResponsiveContainer>
+  </section>
+)
 
 export const ConfidenceChart: React.FC = () => {
   const events = useDashboardStore((s) => s.events)
-
-  const data = [
-    { range: '0-20%', count: events.filter((e) => e.confidence < 0.2).length },
-    { range: '20-40%', count: events.filter((e) => e.confidence >= 0.2 && e.confidence < 0.4).length },
-    { range: '40-60%', count: events.filter((e) => e.confidence >= 0.4 && e.confidence < 0.6).length },
-    { range: '60-80%', count: events.filter((e) => e.confidence >= 0.6 && e.confidence < 0.8).length },
-    { range: '80-100%', count: events.filter((e) => e.confidence >= 0.8).length },
-  ]
-
-  return (
-    <div className="glass-effect card-shadow rounded-lg p-4">
-      <h3 className="text-lg font-semibold mb-4">Confidence Distribution</h3>
-      <ResponsiveContainer width="100%" height={300}>
-        <BarChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-          <XAxis dataKey="range" stroke="#64748b" />
-          <YAxis stroke="#64748b" />
-          <Tooltip content={<ChartTooltip />} />
-          <Bar dataKey="count" fill="#0ea5e9" radius={[8, 8, 0, 0]} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
-  )
+  const data = ['0–20', '20–40', '40–60', '60–80', '80–100'].map((x, i) => ({
+    x: `${x}%`,
+    n: events.filter((e) => Math.min(Math.floor((e.confidence ?? 0) * 5), 4) === i).length,
+  }))
+  return <Histogram title="Confidence" data={data} />
 }
 
 export const TimeSeriesChart: React.FC = () => {
   const events = useDashboardStore((s) => s.events)
-
-  const data = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date()
-    date.setDate(date.getDate() - (6 - i))
-    const dateStr = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    const count = events.filter((e) => {
-      const eventDate = new Date(e.timestamp).toLocaleDateString()
-      const checkDate = date.toLocaleDateString()
-      return eventDate === checkDate
-    }).length
-    return { date: dateStr, count }
-  })
-
-  return (
-    <div className="glass-effect card-shadow rounded-lg p-4">
-      <h3 className="text-lg font-semibold mb-4">Detection Trend (7 Days)</h3>
-      <ResponsiveContainer width="100%" height={300}>
-        <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-          <XAxis dataKey="date" stroke="#64748b" />
-          <YAxis stroke="#64748b" />
-          <Tooltip content={<ChartTooltip />} />
-          <Line
-            type="monotone"
-            dataKey="count"
-            stroke="#0ea5e9"
-            dot={{ fill: '#0ea5e9', r: 4 }}
-            activeDot={{ r: 6 }}
-            strokeWidth={2}
-          />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  )
+  const data = React.useMemo(() => {
+    const byDay = new Map<string, number>()
+    for (const e of [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp))) {
+      const d = new Date(e.timestamp)
+      if (isNaN(d.getTime())) continue
+      const key = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+      byDay.set(key, (byDay.get(key) || 0) + 1)
+    }
+    return Array.from(byDay, ([x, n]) => ({ x, n })).slice(-14)
+  }, [events])
+  return <Histogram title="Candidates by image date" data={data} />
 }

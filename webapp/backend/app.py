@@ -185,6 +185,7 @@ def health():
         "eventCount": count,
         "events_file": EVENTS.name if EVENTS.exists() else None,
         "live_detection": has_weights,
+        "search_available": has_weights or bool(os.getenv("HF_MODEL_REPO")),
         "liveDetectionAvailable": has_weights,
     }
 
@@ -245,9 +246,7 @@ def summary():
 @app.post("/api/detect")
 async def detect(file: UploadFile = File(...), _user: dict = Depends(current_user)):
     """Run the detector on one uploaded tile, on CPU."""
-    if not WEIGHTS.exists():
-        raise HTTPException(503, "no trained weights in this deployment; "
-                                 "precomputed results remain available at /api/events")
+    weights = search_weights()                       # 503 with a reason when none
     import io
     import time
     import numpy as np
@@ -256,7 +255,7 @@ async def detect(file: UploadFile = File(...), _user: dict = Depends(current_use
 
     t0 = time.time()
     img = Image.open(io.BytesIO(await file.read())).convert("RGB")
-    res = YOLO(str(WEIGHTS)).predict(np.array(img), conf=0.25, verbose=False)[0]
+    res = YOLO(str(weights)).predict(np.array(img), conf=0.25, verbose=False)[0]
     names = {0: "vessel", 1: "sts"}
     detections = [{
         "cls": names.get(int(b.cls[0]), str(int(b.cls[0]))),
@@ -272,6 +271,81 @@ async def detect(file: UploadFile = File(...), _user: dict = Depends(current_use
         "sts_count": sts_count,
         "processing_time": round(time.time() - t0, 3),
     }
+
+
+# ---- area search: draw a box, get ships and reasons ------------------------
+# One search at a time: each needs ~1 GB and both free-tier CPUs. Jobs live in
+# memory, so a restart forgets them; the result cache on disk survives.
+# ponytail: in-memory job table + one worker; move to a queue if traffic grows.
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+
+HF_MODEL_REPO = os.getenv("HF_MODEL_REPO")            # e.g. "<user>/darksts-detector"
+SEARCH_WEIGHTS = os.getenv("SEARCH_WEIGHTS", "best.pt")
+_executor = ThreadPoolExecutor(max_workers=1)
+_jobs, _jobs_lock = {}, threading.Lock()
+MAX_JOBS = 100
+
+
+def search_weights() -> Path:
+    """Local weights if shipped, else download once from the Hugging Face Hub."""
+    if WEIGHTS.exists():
+        return WEIGHTS
+    if HF_MODEL_REPO:
+        from huggingface_hub import hf_hub_download
+        return Path(hf_hub_download(HF_MODEL_REPO, SEARCH_WEIGHTS, token=os.getenv("HF_TOKEN")))
+    raise HTTPException(503, "No detector weights in this deployment (set HF_MODEL_REPO).")
+
+
+def _set(job_id, **kw):
+    with _jobs_lock:
+        _jobs[job_id].update(kw)
+
+
+def _run_search(job_id, box, weights):
+    from src import search
+    _set(job_id, status="running")
+    try:
+        result = search.run(box, weights, progress=lambda stage, frac: _set(job_id, stage=stage,
+                                                                            progress=round(frac, 2)))
+        _set(job_id, status="done", stage="Done", progress=1.0, result=result)
+    except (ValueError, LookupError) as e:
+        _set(job_id, status="error", error=str(e))
+    except Exception as e:                           # show something useful, never a stack trace
+        _set(job_id, status="error", error=f"The search failed ({type(e).__name__}). Try again in a minute.")
+        import traceback
+        traceback.print_exc()
+
+
+@app.post("/api/search")
+def start_search(payload: dict, user: dict = Depends(current_user)):
+    """Start a search over {"bbox": [west, south, east, north]}; poll /api/search/{job_id}."""
+    from src.search import validate
+    try:
+        box = validate(payload.get("bbox") or [])
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e) or "Send the box as [west, south, east, north].")
+    weights = search_weights()
+    job_id = uuid.uuid4().hex[:12]
+    with _jobs_lock:
+        ahead = sum(j["status"] in ("queued", "running") for j in _jobs.values())
+        _jobs[job_id] = {"job_id": job_id, "status": "queued", "bbox": list(box), "progress": 0.0,
+                         "stage": "Waiting for the previous search to finish" if ahead else "Starting",
+                         "queue_position": ahead, "user": user["email"], "created": time.time()}
+        for old in sorted(_jobs, key=lambda k: _jobs[k]["created"])[:-MAX_JOBS]:
+            del _jobs[old]
+    _executor.submit(_run_search, job_id, box, weights)
+    return {"job_id": job_id, "queue_position": ahead}
+
+
+@app.get("/api/search/{job_id}")
+def search_status(job_id: str, user: dict = Depends(current_user)):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job or job["user"] != user["email"]:
+            raise HTTPException(404, "No such search. It may have expired after a restart.")
+        return {k: v for k, v in job.items() if k != "user"}
 
 
 if (DIST / "assets").exists():

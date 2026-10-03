@@ -1,0 +1,228 @@
+"""Area-on-demand search: a box in, ships and plain-language reasons out.
+
+The website's one heavy call. Same steps as the region search (`hunt.run`), for
+the newest Sentinel-1 pass over one box:
+
+  1. newest pass covering at least half the box (Planetary Computer)
+  2. warp the box to UTM / 10 m
+  3. detector (YOLO26n by default) on every 1024 px tile, edges included
+  4. land / length / infrastructure filters, duplicate removal
+  5. AIS identities within 2 km / +-1 h (GFW presence)
+  6. hull measurement and side-by-side pairs (STS), counted radar vs AIS
+  7. GFW's own radar detections as an independent check
+  8. one reason per piece of evidence, in words
+
+Wording follows RESEARCH_POSITION.md: a ship with no AIS match is an
+"AIS-unmatched candidate". Nothing here says "dark".
+"""
+import base64
+import io
+import json
+import math
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from src import dark_sts, fetch_s1, gfw, hunt
+from src.config import DATA
+
+MIN_KM, MAX_KM = 11, 60       # one 1024 px tile ... the free-CPU time budget
+LOOKBACK_DAYS = 12            # Sentinel-1 revisit is ~6 days with S1C + S1D
+MIN_OVERLAP = 0.5
+CACHE = DATA / "search_cache"
+CHIPS = 40                    # image chips returned, AIS-unmatched first
+NOT_AVAILABLE = "AIS_NOT_AVAILABLE"
+
+
+def box_km(box):
+    lon0, lat0, lon1, lat1 = box
+    return ((lon1 - lon0) * 111.32 * math.cos(math.radians((lat0 + lat1) / 2)), (lat1 - lat0) * 110.57)
+
+
+def validate(box):
+    """Raise ValueError with a sentence a user can act on."""
+    if len(box) != 4:
+        raise ValueError("Send the box as [west, south, east, north].")
+    lon0, lat0, lon1, lat1 = map(float, box)
+    if not (-180 <= lon0 < lon1 <= 180 and -85 <= lat0 < lat1 <= 85):
+        raise ValueError("The box corners are out of order or off the map.")
+    w, h = box_km(box)
+    if min(w, h) < MIN_KM:
+        raise ValueError(f"Draw a box at least {MIN_KM} km on each side (this one is {w:.0f} × {h:.0f} km).")
+    if max(w, h) > MAX_KM:
+        raise ValueError(f"Draw a box at most {MAX_KM} km on each side (this one is {w:.0f} × {h:.0f} km).")
+    return lon0, lat0, lon1, lat1
+
+
+def scenes(box, end=None, days=LOOKBACK_DAYS):
+    """Passes covering at least half the box, newest first."""
+    end = pd.Timestamp(end or pd.Timestamp.utcnow()).tz_localize(None)
+    items = fetch_s1.search(f"{end - pd.Timedelta(days=days):%Y-%m-%d}", f"{end:%Y-%m-%d}", box=box, limit=100)
+    return [i for i in items if fetch_s1.overlap(i, box) >= MIN_OVERLAP]
+
+
+def scene_time(item):
+    return pd.Timestamp(item["properties"]["datetime"]).tz_localize(None)
+
+
+def pick_scene(items, box, tries=4):
+    """(item, ais, note): the newest pass whose AIS can be checked.
+
+    GFW AIS lags the satellite by a few days, so the very newest pass often has
+    none yet; calling every ship on it "unmatched" would be wrong. Look back up
+    to `tries` passes for one with AIS, and say so when it is not the newest.
+    """
+    for item in items[:tries]:
+        t = scene_time(item)
+        try:
+            ais = gfw.ais_presence(t - pd.Timedelta(hours=2), t + pd.Timedelta(hours=2), box)
+        except Exception:
+            ais = pd.DataFrame()
+        if len(ais):
+            note = None if item is items[0] else (
+                f"The newest pass ({scene_time(items[0]):%d %b %H:%M} UTC) has no AIS data yet, so this "
+                f"shows the newest pass that can be checked against AIS ({t:%d %b %H:%M} UTC).")
+            return item, ais, note
+    return items[0], pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"]), (
+        "AIS for the recent passes over this box is not available yet; ships are shown unchecked.")
+
+
+def reasons(ship, ais_ok, sts_note=None):
+    """Evidence for one ship, one sentence each."""
+    out = []
+    if not ais_ok:
+        out.append("AIS for this hour is not available yet, so this ship could not be checked against AIS.")
+    elif ship["category"] == dark_sts.AIS_UNMATCHED:
+        out.append("No AIS identity within 2 km and ±1 h of the radar pass (AIS source: Global Fishing Watch).")
+    else:
+        n = int(ship["n_ais"])
+        out.append(f"Matches {n} AIS identit{'y' if n == 1 else 'ies'} within 2 km of the radar position.")
+    length = ship["length_m"]
+    if length:
+        size = (" Most ships this size must broadcast AIS (SOLAS)." if length >= 100 else "")
+        out.append(f"Radar length ≈ {length:.0f} m.{size}")
+    if ship.get("gfw_also_unmatched"):
+        out.append("Global Fishing Watch's own Sentinel-1 detections also show no AIS match here.")
+    if sts_note:
+        out.append(sts_note)
+    out.append(f"Detector confidence {ship['conf']:.2f}.")
+    return out
+
+
+def chip_png(tif, x, y, half=60):
+    """Small stretched PNG of the radar around (x, y), base64."""
+    import rasterio
+    from PIL import Image
+    with rasterio.open(tif) as s:
+        r, c = s.index(x, y)
+        img = s.read(1, window=rasterio.windows.Window(c - half, r - half, 2 * half, 2 * half),
+                     boundless=True, fill_value=0).astype(float)
+    v = img[img > 0]
+    lo, hi = np.percentile(v, [1, 99.5]) if v.size else (0, 1)
+    png = (np.clip((img - lo) / max(hi - lo, 1), 0, 1) * 255).astype("uint8")
+    buf = io.BytesIO()
+    Image.fromarray(png).save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
+    """Search one box; returns a JSON-ready dict. Raises ValueError / LookupError for user errors."""
+    from src.filters import clean_detections
+    from src.run_pipeline import detect
+
+    box = validate(box)
+    progress("Finding the newest Sentinel-1 pass over your box", 0.05)
+    items = scenes(box, end)
+    if not items:
+        raise LookupError(f"No Sentinel-1 pass covered at least half of this box in the last "
+                          f"{LOOKBACK_DAYS} days. Try a box further from the coast or a bit larger.")
+    progress("Checking which pass already has AIS data", 0.1)
+    item, ais, scene_note = pick_scene(items, box)
+    key = f"{item['id']}_{'_'.join(f'{v:.3f}' for v in box)}"
+    hit = Path(cache) / f"{key}.json"
+    if hit.exists():
+        progress("Found an earlier search of this pass", 1.0)
+        return {**json.loads(hit.read_text()), "cached": True}
+
+    progress("Downloading the radar image", 0.15)
+    tif = fetch_s1.fetch(item, box=box, out_dir=Path(cache) / "scenes" / key)
+    t = scene_time(item)
+
+    progress("Detecting ships", 0.4)
+    det = detect(tif, weights, conf=hunt.STS_CONF)
+    if len(det):
+        det = det[(det.cls == "sts") | (det.conf >= hunt.VESSEL_CONF)].copy()
+        det["tif"] = str(tif)
+        det = hunt.dedupe(clean_detections(det)) if len(det) else det
+
+    result = {"scene": {"id": item["id"], "time": t.isoformat() + "Z",
+                        "platform": item["properties"].get("platform")},
+              "bbox": list(box), "ais_source": "Global Fishing Watch (hourly presence)",
+              "scene_note": scene_note,
+              "cached": False, "ships": [], "sts": []}
+    if len(det):
+        progress("Matching ships to AIS", 0.6)
+        ais_ok = len(ais) > 0
+        res = dark_sts.characterise(det, ais, buffer_m=2000, window_h=1)
+        if not ais_ok:
+            res["category"] = NOT_AVAILABLE
+
+        progress("Measuring hulls and looking for ships side by side", 0.75)
+        res = hunt.hull_shape(res)
+        res["wide"] = False           # one box has too few AIS-matched ships to calibrate width
+        sts = hunt.sts_candidates(res)
+        if len(sts):
+            sts = hunt.count_identities(sts, res, {res.scene.iloc[0]: ais})
+            sts["tier"] = np.where(sts.evidence.str.contains("rafted"), "A", "B")
+
+        progress("Cross-checking with Global Fishing Watch radar detections", 0.85)
+        res["gfw_also_unmatched"] = False
+        if ais_ok and (res.category == dark_sts.AIS_UNMATCHED).any():
+            try:
+                g = gfw.sar_unmatched(str(t.date()), box)
+                if len(g):
+                    res["gfw_also_unmatched"] = [
+                        r.category == dark_sts.AIS_UNMATCHED and
+                        bool((hunt.near(r.lat, r.lon, g.lat, g.lon) < 1500).any()) for _, r in res.iterrows()]
+            except Exception:
+                pass                  # an independent check failing must not fail the search
+
+        progress("Writing the reasons", 0.95)
+        notes = {}
+        for _, s in sts.iterrows() if len(sts) else []:
+            note = (f"Seen beside another hull {s.spacing_m:.0f} m away (ships moored together)."
+                    if s.tier == "A" else f"Another hull {s.spacing_m:.0f} m away (within 500 m).")
+            for i in res.index[hunt.near(s.lat, s.lon, res.lat, res.lon) <= max(s.spacing_m, 50) / 2 + 30]:
+                notes[i] = note
+        order = res.assign(_u=(res.category == dark_sts.AIS_UNMATCHED)).sort_values(
+            ["_u", "length_m"], ascending=[False, False])
+        for n, (i, r) in enumerate(order.iterrows()):
+            ship = {"id": int(n), "lat": round(float(r.lat), 5), "lon": round(float(r.lon), 5),
+                    "length_m": round(float(r.hull_m if r.hull_m == r.hull_m else r.length_m)),
+                    "beam_m": None if r.beam_m != r.beam_m else round(float(r.beam_m)),
+                    "conf": round(float(r.conf), 3), "category": r.category,
+                    "n_ais": int(r.n_identities), "gfw_also_unmatched": bool(r.gfw_also_unmatched)}
+            ship["reasons"] = reasons(ship, ais_ok, notes.get(i))
+            ship["chip_png"] = chip_png(tif, r.x, r.y) if n < CHIPS else None
+            result["ships"].append(ship)
+        result["sts"] = [{"lat": round(float(s.lat), 5), "lon": round(float(s.lon), 5),
+                          "tier": s.tier, "spacing_m": int(s.spacing_m), "radar_hulls": int(s.n_radar),
+                          "ais_identities": int(s.n_ais) if ais_ok else None,
+                          "without_ais": int(s.missing) if ais_ok else None}
+                         for _, s in (sts.iterrows() if len(sts) else [])]
+        result["ais_available"] = ais_ok
+    else:
+        result["ais_available"] = None
+
+    cats = pd.Series([s["category"] for s in result["ships"]], dtype=object)
+    result["counts"] = {"ships": len(result["ships"]),
+                        "ais_unmatched": int((cats == dark_sts.AIS_UNMATCHED).sum()),
+                        "sts_pairs": len(result["sts"]),
+                        "sts_pairs_with_silent_hull": sum((s["without_ais"] or 0) > 0 for s in result["sts"])}
+    result["note"] = ("A ship with no AIS match is a candidate for review, not a finding: AIS can be "
+                      "missing for innocent reasons (reception gaps, small craft, military vessels).")
+    hit.parent.mkdir(parents=True, exist_ok=True)
+    hit.write_text(json.dumps(result))
+    progress("Done", 1.0)
+    return result

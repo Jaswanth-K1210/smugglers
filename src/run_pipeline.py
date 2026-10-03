@@ -26,6 +26,19 @@ OUT = ROOT / "outputs"
 WEIGHTS = ROOT / "models" / "darksts" / "weights" / "best.pt"
 
 
+def tile_starts(n: int, size: int = 1024):
+    """Tile offsets covering 0..n, the last tile shifted back to end at n.
+
+    Plain range() stepping drops the leftover strip on the right and bottom,
+    up to 10 km of sea per scene. Overlapping detections are de-duplicated
+    downstream (hunt.dedupe).
+    """
+    if n <= size:
+        return [0]
+    s = list(range(0, n - size + 1, size))
+    return s if s[-1] == n - size else s + [n - size]
+
+
 def detect(tif: Path, weights: Path = WEIGHTS, conf: float = 0.25, size: int = 1024):
     """Run the detector over a scene. Returns detections in world coordinates."""
     from ultralytics import YOLO
@@ -33,8 +46,8 @@ def detect(tif: Path, weights: Path = WEIGHTS, conf: float = 0.25, size: int = 1
     model = YOLO(str(weights))
     rows = []
     with rasterio.open(tif) as src:
-        for top in range(0, src.height - size + 1, size):
-            for left in range(0, src.width - size + 1, size):
+        for top in tile_starts(src.height, size):
+            for left in tile_starts(src.width, size):
                 win = rasterio.windows.Window(left, top, size, size)
                 img = src.read(1, window=win)
                 if (img > 0).mean() < 0.9:

@@ -2,7 +2,15 @@ fastapi
 uvicorn[standard]
 python-multipart
 pillow
-# Only needed for the optional live /api/detect endpoint. Remove both lines to
-# ship a results-only deployment in a much smaller image.
+# The detector, for /api/search and /api/detect (CPU wheels via the Dockerfile).
 torch
 ultralytics
+# Area search (src/search.py): radar download, filters, GFW AIS, weights from the Hub
+numpy
+pandas
+scipy
+requests
+python-dotenv
+rasterio
+global-land-mask
+huggingface_hub

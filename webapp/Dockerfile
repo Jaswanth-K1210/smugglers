@@ -13,14 +13,22 @@ COPY webapp/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
       --extra-index-url https://download.pytorch.org/whl/cpu
 
+COPY src ./src
 COPY webapp/backend ./webapp/backend
 COPY webapp/frontend ./webapp/frontend
 COPY outputs/events.geojson ./outputs/events.geojson
-# Weights are optional: without them /api/detect reports 503 and the
-# precomputed endpoints still work.
-COPY models* ./models/
+# No weights in the image: they come from the Hugging Face Hub (HF_MODEL_REPO).
 
+# Spaces run the container as uid 1000: everything written at runtime (user
+# accounts, search cache, downloaded weights, Ultralytics settings) goes to one
+# writable folder. Set HF_MODEL_REPO (and HF_TOKEN if the repo is private) and
+# GFW_API_TOKEN as Space secrets; the detector is fetched from the Hub on the
+# first search.
+RUN mkdir -p /app/data && chmod 777 /app/data
 ENV EVENTS_PATH=/app/outputs/events.geojson \
-    WEIGHTS_PATH=/app/models/darksts/weights/best.pt
+    WEIGHTS_PATH=/app/models/darksts/weights/best.pt \
+    USERS_DB=/app/data/users.db \
+    HF_HOME=/app/data/hf \
+    YOLO_CONFIG_DIR=/app/data/ultralytics
 EXPOSE 7860
 CMD ["uvicorn", "webapp.backend.app:app", "--host", "0.0.0.0", "--port", "7860"]

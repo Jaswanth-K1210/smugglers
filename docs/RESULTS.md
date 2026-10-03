@@ -261,6 +261,58 @@ empty sea hours later is the expected outcome either way. Same-time optical
 confirmation needs a sensor passing close to the radar time (commercial
 imagery, or Landsat/Sentinel-2 on a lucky overlap) and is left as future work.
 
+### 4g. STS recount after the one-object rule
+
+`hunt.one_hull` (commits `e96b01c`, `2ccc0cf`, `f5b8797`): a pair is two ships
+only if both detections sit on their own bright hull (gaps of up to ~60 m
+inside one hull are bridged), and a pair on one hull is kept only when the two
+detections lie side by side, not along its length.
+
+| AIS-unmatched STS (no GFW encounter) | A | B | C | Total |
+| ------------------------------------ | - | - | - | ----- |
+| Oman, §4d (before) | 8 | 22 | 11 | 41 |
+| Oman, after | **1** | **9** | 11 | **21** |
+| Laconia, §4e (before) | 2 | – | – | 2 |
+| Laconia, after | **1** | – | – | **1** |
+
+All STS candidates (any AIS state): Oman 191 → 150, Laconia 4 → 3. The rule
+removed half of the AIS-unmatched candidates, consistent with the §4d chip
+review (12 of 30 were one hull). Tier C (one over-wide hull) does not use pairs
+and is unchanged. Chips after the final rule are on Drive
+(`hunt_*/sts_chips.png`) and have not yet been re-inspected.
+
+## 6. Multi-region detector (Skagen + Oman + Laconia)
+
+`src/pseudo.py` turns Oman / Laconia detections confirmed by a GFW AIS identity
+into `vessel` labels; tiles holding any AIS-unmatched or `sts` detection are
+left out, so a possible ship is never taught as background. Training set: 339
+tiles (Skagen 170, Oman 140, Laconia 29), split by scene (284 train / 55 val,
+20 held-out scenes). RT-DETR-l, same schedule as §3, A100, 16 min.
+
+Both models scored on the **same** held-out tiles (`train.compare`):
+
+| Model | Tiles | n | Vessel mAP50 | STS mAP50 | Recall |
+| ----- | ----- | - | ------------ | --------- | ------ |
+| Skagen only (§3) | Skagen | 30 | 0.367 | 0.030 | 0.230 |
+| Multi-region | Skagen | 30 | **0.475** | 0.021 | 0.243 |
+| Skagen only (§3) | Oman + Laconia | 25 | 0.113 | – | 0.311 |
+| Multi-region | Oman + Laconia | 25 | **0.512** | – | **0.571** |
+
+**Reading.** On the new regions, the fair test because neither model saw those
+scenes, vessel mAP50 rises 0.11 → 0.51 and recall 0.31 → 0.57: the Skagen
+model does not transfer, and AIS-confirmed pseudo-labels fix most of that. On
+Skagen the multi-region model is also better, even though the new random split
+may hold out scenes the Skagen model trained on (which would favour it). Caveat:
+new-region labels are AIS-confirmed detections only, so ships the original
+detector missed are unlabelled there; precision on those tiles reads low.
+
+The `sts` class is unreliable in both models on this split (11 instances, AP
+≤ 0.03; the 0.36 in §3 was on a different split). The pipeline therefore
+finds STS from geometry (pairs, hull width, radar-vs-AIS counting), not from
+this class.
+
+**Deployment:** the multi-region model (`darksts/models/multi_rtdetr/weights/best.pt`).
+
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 
 *Pending* — one-scene cost and quality check first (`src/fetch_cdse.py`), then a

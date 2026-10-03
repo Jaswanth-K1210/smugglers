@@ -311,7 +311,30 @@ The `sts` class is unreliable in both models on this split (11 instances, AP
 finds STS from geometry (pairs, hull width, radar-vs-AIS counting), not from
 this class.
 
-**Deployment:** the multi-region model (`darksts/models/multi_rtdetr/weights/best.pt`).
+### 6b. Detector families on the multi-region data
+
+Same 339 tiles, same split and schedule (80 epochs, imgsz 1024), scored on the
+same held-out tiles; CPU time is per 1024 px tile on the Colab host CPU,
+the closest stand-in for the free Hugging Face Space.
+
+| Model | Vessel mAP50, new regions (n=25) | Recall, new regions | Vessel mAP50, Skagen (n=30) | Vessel mAP50, all | CPU s / tile | Size |
+| ----- | -------------------------------- | ------------------- | --------------------------- | ----------------- | ------------ | ---- |
+| RT-DETR-l | 0.512 | 0.571 | **0.475** | 0.494 | 3.49 | 66 MB |
+| YOLOv8n | 0.532 | 0.526 | 0.329 | 0.471 | **0.30** | 6.3 MB |
+| YOLO11n | 0.523 | 0.543 | 0.402 | 0.481 | 0.40 | 5.6 MB |
+| YOLO12n | 0.546 | **0.612** | 0.361 | 0.488 | 0.79 | 5.6 MB |
+| **YOLO26n** | **0.558** | 0.547 | 0.386 | **0.502** | 0.31 | 5.5 MB |
+
+**Reading.** On the new regions all five are within ~0.05 mAP50 of each
+other, which is inside the noise of 25 tiles; no family clearly wins on
+accuracy. Speed separates them: RT-DETR is ~11× slower on CPU than the nano
+CNNs, which would take a 50 × 50 km search from ~1 to ~2.5 minutes of
+detection on a free Space. RT-DETR remains best on Skagen (0.475), where the
+labels are densest.
+
+**Deployment:** YOLO26n (`darksts/models/multi_yolo26n/weights/best.pt`) —
+highest overall and new-region vessel mAP50, and among the two fastest on CPU.
+RT-DETR-l is reported as the accuracy reference.
 
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 

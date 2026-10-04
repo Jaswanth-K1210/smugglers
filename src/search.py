@@ -93,13 +93,20 @@ def pick_scene(items, box, tries=4):
         "AIS for the recent passes over this box is not available yet; ships are shown unchecked.")
 
 
-def evidence(ship, sts_note=None, gap=None):
-    """Tags for the evidence points that make an AIS-unmatched ship worth review."""
+def evidence(ship, sts_note=None, gap=None, cover=None):
+    """Tags for the evidence points that make an AIS-unmatched ship worth review.
+
+    Missing AIS only counts where AIS coverage was fair or good: with poor
+    coverage the absence is mostly reception, and neither it nor the size rule
+    built on it ("ships this size must broadcast") may raise the count.
+    """
     if ship["category"] != dark_sts.AIS_UNMATCHED:
         return []
-    tags = ["no_ais"]
-    if ship["length_m"] and ship["length_m"] >= 100:
-        tags.append("large_ship")
+    tags = []
+    if cover is None or cover.get("label") in ("good", "fair"):
+        tags.append("no_ais")
+        if ship["length_m"] and ship["length_m"] >= 100:
+            tags.append("large_ship")
     if ship.get("gfw_also_unmatched"):
         tags.append("gfw_radar_agrees")
     if sts_note:
@@ -307,7 +314,7 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
             ship["coverage"] = cover["label"]
             ship["reasons"] = reasons(ship, ais_ok, notes.get(i), gap, zone, source_names,
                                       match.explain(cands), cover)
-            ship["evidence"] = evidence(ship, notes.get(i), gap)
+            ship["evidence"] = evidence(ship, notes.get(i), gap, cover)
             ship["evidence_points"] = len(ship["evidence"])
             ship["zone"] = zone
             ship["nearby_ais_gap"] = None if not gap else {

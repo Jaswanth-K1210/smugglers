@@ -18,8 +18,8 @@ image = base_image.add_local_file("modal_app.py", "/root/modal_app.py")
 app = modal.App("darksts-eval")
 
 
-@app.function(image=image, cpu=2, memory=4096, timeout=1200, secrets=[modal.Secret.from_dict(values)],
-              max_containers=10)
+@app.function(image=image, cpu=2, memory=4096, timeout=1800, secrets=[modal.Secret.from_dict(values)],
+              max_containers=3, env={"GFW_RETRY_WAIT": "30"})   # GFW rate-limits 10 parallel callers
 def scene(item, box):
     import os
     import sys
@@ -58,6 +58,15 @@ def main(n: int = 30, region: str = "oman", start: str = "2026-07-01", end: str 
     print(shore.pivot(index="threshold", columns="shore", values="recall").to_string())
     print("\nAIS ships per shore class (same at every threshold):")
     print(shore[shore.threshold == evaluate.THRESHOLDS[0]][["shore", "n_ais"]].to_string(index=False))
+    pick = evaluate.select_threshold(table)
+    best_f1 = table.loc[table.f1_vs_ais.idxmax()]
+    print(f"\nselected threshold (highest recall with >= 60 % AIS-confirmed): {pick}")
+    print(f"F1-vs-AIS maximum: threshold {best_f1.threshold}, F1 {best_f1.f1_vs_ais}")
+    Path("outputs").mkdir(exist_ok=True)
+    (Path("outputs") / f"calibration_yolo26n_{region}.json").write_text(json.dumps({
+        "model": "yolo26n", "region": region, "period": [start, end], "scenes": len(good),
+        "visible_ais_ships": int(table.n_ais.iloc[0]), "area_km2": round(area),
+        "selected": pick, "table": table.to_dict(orient="records")}, indent=1))
     out = Path("outputs") / f"eval_{region}.json"
     out.write_text(json.dumps({"region": region, "box": box, "results": results}, default=str))
     print(f"\nsaved {out}")

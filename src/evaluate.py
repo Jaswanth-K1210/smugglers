@@ -127,3 +127,19 @@ def summarise(results):
     s = pd.DataFrame([r for x in results for r in x["by_shore"]]).groupby(["threshold", "shore"]).sum()
     s["recall"] = (s.matched / s.n_ais).round(3)
     return t.reset_index(), s.reset_index(), float(area)
+
+
+def select_threshold(table, min_confirmed=0.6):
+    """Operating threshold: the highest AIS recall whose AIS-confirmed share is >= min_confirmed.
+
+    For finding ships without AIS, a missed ship costs more than a doubtful
+    candidate, so recall leads; the floor keeps candidates mostly real ships
+    (AIS-confirmed share is a lower bound on precision: some "unconfirmed"
+    detections are genuine AIS-unmatched ships). None if no threshold qualifies.
+    """
+    ok = table[table.ais_confirmed_share >= min_confirmed]
+    if ok.empty:
+        return None
+    row = ok.sort_values(["recall", "threshold"], ascending=[False, False]).iloc[0]
+    return {"threshold": float(row.threshold), "recall": float(row.recall),
+            "ais_confirmed_share": float(row.ais_confirmed_share), "min_confirmed": min_confirmed}

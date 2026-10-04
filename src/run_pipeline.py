@@ -30,6 +30,12 @@ MIN_VALID = 0.2      # a tile needs this much radar coverage to be searched
 EDGE_PX = 20         # detections within ~200 m of no-data are the strip edge, not ships
 
 
+def on_strip_edge(valid, r, c, px=EDGE_PX, min_valid=0.95):
+    """True when (r, c) lies within `px` pixels of no-data: the strip edge, not a ship."""
+    near = valid[max(r - px, 0):r + px, max(c - px, 0):c + px]
+    return near.size == 0 or near.mean() < min_valid
+
+
 def tile_starts(n: int, size: int = 1024):
     """Tile offsets covering 0..n, the last tile shifted back to end at n.
 
@@ -64,9 +70,7 @@ def detect(tif: Path, weights: Path = WEIGHTS, conf: float = 0.25, size: int = 1
 
                 for b in model.predict(rgb, conf=conf, verbose=False)[0].boxes:
                     x0, y0, x1, y1 = b.xyxy[0].tolist()
-                    r, c = int((y0 + y1) / 2), int((x0 + x1) / 2)
-                    near = valid[max(r - EDGE_PX, 0):r + EDGE_PX, max(c - EDGE_PX, 0):c + EDGE_PX]
-                    if near.size == 0 or near.mean() < 0.95:
+                    if on_strip_edge(valid, int((y0 + y1) / 2), int((x0 + x1) / 2)):
                         continue            # on the edge of the radar strip: the edge itself, not a ship
                     cls = autolabel.CLASSES_INV[int(b.cls[0])]
                     cx, cy = left + (x0 + x1) / 2, top + (y0 + y1) / 2

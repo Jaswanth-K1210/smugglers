@@ -81,3 +81,30 @@ def main():
         "bands": review.BANDS, "chip_halfwidth_px": [review.SMALL, review.WIDE],
         "stretch": "log10(DN) fixed 20..2000 for every chip"}, indent=1))
     print(f"wrote {n} cards to bench/t3_review/")
+
+
+@app.local_entrypoint()
+def count():
+    """Exact per-band population of the detections the sheet was sampled from (sheet untouched)."""
+    import requests
+    from src import review
+    from src.fetch_s1 import STAC
+    from src.hunt import REGIONS
+    log_path = Path("bench/t3_review/build_log.json")
+    log = json.loads(log_path.read_text())
+    items = [requests.get(f"{STAC}/collections/sentinel-1-grd/items/{s}", timeout=90).json() for s in log["dev_passes"]]
+    dets = [d for res in detect_scene.starmap([(it, REGIONS["oman"]) for it in items]) if isinstance(res, list) for d in res]
+    picked = review.sample(dets)
+    pop = {}
+    for d in dets:
+        b = review.band_of(d["score"])
+        pop[b] = pop.get(b, 0) + 1
+    log["population_per_band"] = dict(sorted(pop.items()))
+    log["population_source"] = "recount of this sheet's own detections (modal run modal_review.py::count)"
+    log["recount_total"] = len(dets)
+    import csv
+    key = sorted(round(float(r["score"]), 4) for r in csv.DictReader(open("bench/t3_review/KEY_reviewers_do_not_open/key.csv")))
+    log["recount_reproduces_sample"] = bool(len(dets) == log["detections_total"] and
+                                            sorted(picked.score.round(4).tolist()) == key)
+    log_path.write_text(json.dumps(log, indent=1))
+    print("population per band:", log["population_per_band"], "| total", len(dets), "| sheet total", log["detections_total"])

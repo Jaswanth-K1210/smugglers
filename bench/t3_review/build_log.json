@@ -59,5 +59,22 @@
   32,
   160
  ],
- "stretch": "log10(DN) fixed 20..2000 for every chip"
+ "stretch": "log10(DN) fixed 20..2000 for every chip",
+ "population_per_band": {
+  "0.10-0.15": 985,
+  "0.15-0.25": 1328,
+  "0.25-0.40": 1850,
+  "0.40-1.00": 4541
+ },
+ "population_source": "recount of this sheet's own detections (modal run modal_review.py::count)",
+ "recount_total": 8704,
+ "recount_reproduces_sample": true,
+ "duplicate_check": {
+  "distinct_positions_300m": 94,
+  "repeated_positions": 5,
+  "detections_at_repeated": 11,
+  "largest_repeat": 3,
+  "passes_represented": 26,
+  "max_from_one_pass": 11
+ }
 }

@@ -1,4 +1,5 @@
 import io
+import time
 from pathlib import Path
 import pytest
 from starlette.testclient import TestClient
@@ -157,3 +158,140 @@ def test_auth_flow(anon):
     token = r.json()["token"]
     assert anon.get("/api/events", headers={"Authorization": f"Bearer {token}"}).status_code == 200
     assert anon.get("/api/events", headers={"Authorization": f"Bearer {token[:-1]}x"}).status_code == 401
+
+
+def test_live_ais_store_and_bbox(client):
+    from webapp.backend import feeds
+    feeds.ships.clear()
+    now = 1_000_000.0
+    feeds._store({"MetaData": {"MMSI": 1, "ShipName": "ALPHA  ", "latitude": 57.7, "longitude": 10.6},
+                  "Message": {"PositionReport": {"Sog": 0.2, "Cog": 90, "TrueHeading": 511}}}, now)
+    feeds._store({"MetaData": {"MMSI": 2, "latitude": 25.0, "longitude": 56.5}, "Message": {}}, now - feeds.STALE_S - 1)
+    feeds._store({"MetaData": {"MMSI": 3, "latitude": None, "longitude": 1}, "Message": {}}, now)
+    v, total = feeds.live_vessels([10, 57, 11, 58], now=now)
+    assert total == 1 and [x["mmsi"] for x in v] == ["1"] and v[0]["name"] == "ALPHA" and v[0]["heading"] is None
+    assert 2 not in feeds.ships                     # stale position dropped
+    r = client.get("/api/live?bbox=10,57,11,58")
+    assert r.status_code == 200 and "configured" in r.json()
+    assert client.get("/api/live?bbox=1,2").status_code == 422
+    feeds.ships.clear()
+
+
+def test_live_ais_thins_evenly_past_the_cap(monkeypatch):
+    from webapp.backend import feeds
+    feeds.ships.clear()
+    monkeypatch.setattr(feeds, "MAX_VESSELS", 100)   # 10 × 10 grid
+    for k in range(2000):                           # dense cluster in one corner + sparse spread
+        lat, lon = (1 + k * 1e-5, 1 + k * 1e-5) if k < 1900 else ((k % 10) * 9 + 0.5, (k // 10 % 10) * 9 + 0.5)
+        feeds._store({"MetaData": {"MMSI": k, "latitude": lat, "longitude": lon}, "Message": {}}, 1.0)
+    v, total = feeds.live_vessels([0, 0, 90, 90], now=1.0)
+    assert total == 2000 and len(v) <= 100
+    assert max(x["lat"] for x in v) > 45 and max(x["lon"] for x in v) > 45   # far corner still covered
+    feeds.ships.clear()
+
+
+def test_news_rss_parse():
+    from webapp.backend import feeds
+    xml = """<rss><channel>
+      <item><title>Tanker seized - Reuters</title><link>https://a</link><source>Reuters</source>
+        <pubDate>Mon, 01 Sep 2026 10:00:00 GMT</pubDate></item>
+      <item><title>Newer story</title><link>https://b</link><pubDate>Tue, 02 Sep 2026 10:00:00 GMT</pubDate></item>
+    </channel></rss>"""
+    items = feeds.parse_rss(xml)
+    assert [i["title"] for i in items] == ["Newer story", "Tanker seized"]
+    assert items[1]["source"] == "Reuters"
+
+
+def test_live_vessel_type_from_static_data(client):
+    from webapp.backend import feeds
+    feeds.ships.clear(); feeds.statics.clear()
+    t = time.time()
+    feeds._store({"MessageType": "PositionReport", "MetaData": {"MMSI": 538001000, "ShipName": "NORD@@@", "latitude": 57.7, "longitude": 10.6},
+                  "Message": {"PositionReport": {"Sog": 0.1, "NavigationalStatus": 1, "TrueHeading": 90}}}, t)
+    feeds._store({"MessageType": "ShipStaticData", "MetaData": {"MMSI": 538001000},
+                  "Message": {"ShipStaticData": {"Type": 81, "ImoNumber": 9300001, "CallSign": "V7AB@",
+                              "Dimension": {"A": 200, "B": 50, "C": 20, "D": 24}, "Destination": "FUJAIRAH@@"}}}, t)
+    feeds._store({"MessageType": "PositionReport", "MetaData": {"MMSI": 538003000, "latitude": 57, "longitude": 10},
+                  "Message": {"PositionReport": {}}}, t)
+    feeds._store({"MessageType": "ShipStaticData", "MetaData": {"MMSI": 538003000},
+                  "Message": {"ShipStaticData": {"Type": 70, "Name": "FENSFJORD@@"}}}, t)
+    assert client.get("/api/live/538003000").json()["name"] == "FENSFJORD"
+    feeds._store({"MessageType": "StaticDataReport", "MetaData": {"MMSI": 538002000},
+                  "Message": {"StaticDataReport": {"ReportB": {"Valid": True, "ShipType": 37, "CallSign": "X"}}}}, t)
+    r = client.get("/api/live/538001000").json()
+    assert r["name"] == "NORD" and r["type"] == "Tanker (hazard category A)" and r["imo"] == 9300001
+    assert r["length_m"] == 250 and r["beam_m"] == 44 and r["destination"] == "FUJAIRAH" and r["nav_status"] == "At anchor"
+    assert client.get("/api/live/538002000").json()["type"] == "Pleasure craft"
+    assert client.get("/api/live/999").status_code == 404
+    assert feeds.ship_type(0) is None and feeds.ship_type(70) == "Cargo" and feeds.ship_type(52) == "Tug"
+    assert r["flag"] == {"iso2": "MH", "country": "Marshall Islands (Republic of the)"}
+    assert feeds.flag(2190001) is None and feeds.flag(992191234) is None   # short MMSI, aid to navigation
+    assert r["track"] == [[57.7, 10.6]]
+    feeds.ships.clear(); feeds.statics.clear(); feeds.tracks.clear()
+
+
+def test_live_track_samples_every_5_min_for_6_h():
+    from webapp.backend import feeds
+    feeds.ships.clear(); feeds.tracks.clear()
+    t0 = feeds.T0
+    for k in range(0, 8 * 3600, 60):                 # a report every minute for 8 h
+        feeds._store({"MessageType": "PositionReport", "MetaData": {"MMSI": 7, "latitude": 50 + k / 1e5, "longitude": 1.0},
+                      "Message": {"PositionReport": {}}}, t0 + k)
+    tr = feeds.tracks[7]
+    assert len(tr) // 3 <= feeds.TRACK_KEEP_S // feeds.TRACK_EVERY_S + 1
+    assert tr[-1] - tr[2] <= feeds.TRACK_KEEP_S
+    feeds.ships.clear(); feeds.tracks.clear()
+
+
+def test_ais_eta():
+    from webapp.backend import feeds
+    assert feeds._eta({"Month": 10, "Day": 8, "Hour": 12, "Minute": 0}) == "10-08 12:00 UTC"
+    assert feeds._eta({"Month": 0, "Day": 0, "Hour": 24, "Minute": 60}) is None
+    assert feeds._eta({"Month": 3, "Day": 1, "Hour": 24, "Minute": 60}) == "03-01"
+
+
+def test_ais_static_data_survives_restart(tmp_path, monkeypatch):
+    from webapp.backend import feeds
+    monkeypatch.setattr(feeds, "STATIC_PATH", tmp_path / "ais_static.json")
+    feeds.statics.clear()
+    feeds.statics[311027600] = {"type_code": 80, "imo": 9466130, "t": time.time()}
+    feeds.statics[219000001] = {"type_code": 70, "imo": None, "t": time.time() - feeds.STATIC_TTL - 1}  # expired
+    feeds.save_statics()
+    feeds.statics.clear()
+    feeds.load_statics()
+    assert list(feeds.statics) == [311027600] and feeds.statics[311027600]["imo"] == 9466130
+    feeds.statics.clear()
+
+
+def test_gfw_identity_picks_latest_type_and_fills_imo(monkeypatch):
+    from webapp.backend import feeds
+    import requests as rq
+    class R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"entries": [{"registryInfo": [], "selfReportedInfo": [{"ssvid": "538006472", "imo": "9268887", "callsign": "V7X"}],
+                                 "combinedSourcesInfo": [{"shiptypes": [{"name": "NA", "yearTo": 2014}, {"name": "CARGO", "yearTo": 2026}]}]}]}
+    monkeypatch.setattr(rq, "get", lambda *a, **k: R())
+    monkeypatch.setattr(feeds.requests, "get", lambda *a, **k: R())
+    monkeypatch.setattr("src.gfw._headers", lambda: {})
+    feeds._identities.clear()
+    ident = feeds.gfw_identity(538006472)
+    assert ident["type"] == "Cargo" and ident["imo"] == 9268887 and ident["callsign"] == "V7X"
+    feeds._identities.clear()
+
+
+def test_type_groups_for_map_colours():
+    from webapp.backend import feeds
+    assert [feeds.type_group(c) for c in (None, 30, 37, 52, 33, 41, 69, 79, 84, 90)] == [
+        "unknown", "fishing", "pleasure", "special", "special", "highspeed", "passenger", "cargo", "tanker", "other"]
+
+
+def test_map_group_falls_back_to_looked_up_gfw_identity():
+    from webapp.backend import feeds
+    feeds.ships.clear(); feeds.statics.clear(); feeds._identities.clear()
+    feeds._store({"MessageType": "PositionReport", "MetaData": {"MMSI": 215672000, "latitude": 57.7, "longitude": 10.8},
+                  "Message": {"PositionReport": {}}}, time.time())
+    assert feeds.live_vessels()[0][0]["group"] == "unknown"
+    feeds._identities["215672000"] = {"type": "Cargo"}
+    assert feeds.live_vessels()[0][0]["group"] == "cargo"
+    feeds.ships.clear(); feeds._identities.clear()

@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { apiService } from '../services/api'
+import { Panel } from './Panel'
 
 export const DetectionUpload: React.FC = () => {
   const [file, setFile] = useState<File | null>(null)
@@ -21,13 +22,10 @@ export const DetectionUpload: React.FC = () => {
   }
 
   return (
-    <section className="panel space-y-4 p-5">
-      <div>
-        <h2 className="panel-title">Run detection</h2>
-        <p className="mt-1 text-sm text-ink-2">Upload one Sentinel-1 tile. The detector runs on CPU in a few seconds.</p>
-      </div>
+    <Panel title="Run detection" right={<span className="text-[10px] uppercase text-ink-3">CPU</span>} bodyClassName="space-y-3 p-3">
+      <p className="text-xs leading-relaxed text-ink-2">Upload one Sentinel-1 tile. The detector runs in a few seconds.</p>
 
-      <label className="block cursor-pointer rounded-md border border-dashed border-rule bg-paper px-4 py-5 text-center text-sm hover:border-ink-3">
+      <label className="block cursor-pointer rounded-sm border border-dashed border-rule bg-paper px-3 py-4 text-center text-xs hover:border-[#444]">
         <span className="font-medium text-signal">{file ? file.name : 'Choose a tile'}</span>
         <span className="mt-1 block text-ink-3">GeoTIFF, JP2, PNG or JPEG</span>
         <input type="file" accept=".tif,.tiff,.jp2,.png,.jpg,.jpeg" className="sr-only"
@@ -41,12 +39,12 @@ export const DetectionUpload: React.FC = () => {
       {error && <p role="alert" className="text-sm text-unmatched">{error}</p>}
 
       {result && (
-        <dl className="grid grid-cols-3 gap-2 border-t border-rule pt-4 text-sm">
-          <div><dt className="text-ink-2">Vessels</dt><dd className="font-mono text-xl font-semibold">{result.vessels_count ?? 0}</dd></div>
-          <div><dt className="text-ink-2">Pairs</dt><dd className="font-mono text-xl font-semibold">{result.sts_count ?? 0}</dd></div>
-          <div><dt className="text-ink-2">Time</dt><dd className="font-mono text-xl font-semibold">{Number(result.processing_time ?? 0).toFixed(1)}s</dd></div>
+        <dl className="grid grid-cols-3 gap-2 border-t border-rule pt-3 text-[11px] uppercase">
+          <div><dt className="text-ink-2">Vessels</dt><dd className="text-lg font-bold text-ink">{result.vessels_count ?? 0}</dd></div>
+          <div><dt className="text-ink-2">Pairs</dt><dd className="text-lg font-bold text-ink">{result.sts_count ?? 0}</dd></div>
+          <div><dt className="text-ink-2">Time</dt><dd className="text-lg font-bold text-ink">{Number(result.processing_time ?? 0).toFixed(1)}s</dd></div>
         </dl>
       )}
-    </section>
+    </Panel>
   )
 }

@@ -3,12 +3,12 @@ export default {
   theme: {
     extend: {
       colors: {
-        paper: '#070B0A',
-        surface: '#0B1210',
-        ink: { DEFAULT: '#D3E2DA', 2: '#8BA197', 3: '#56685F' },
-        rule: '#1D2B26',
-        shoal: '#0A1512',
-        signal: { DEFAULT: '#3BF08A', dark: '#2BC771' },
+        paper: '#0A0A0A',
+        surface: '#141414',
+        ink: { DEFAULT: '#E8E8E8', 2: '#A3A3A3', 3: '#838383' },
+        rule: '#2A2A2A',
+        shoal: '#111111',
+        signal: { DEFAULT: '#44FF88', dark: '#2FD970' },
         // AIS evidence categories; validated as a categorical set on the dark surface
         visible: '#1C93CF',
         partial: '#C77D06',

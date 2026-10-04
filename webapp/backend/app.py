@@ -348,6 +348,67 @@ def search_status(job_id: str, user: dict = Depends(current_user)):
         return {k: v for k, v in job.items() if k != "user"}
 
 
+# ── Live context: AIS positions (aisstream.io) and sanctions news ─────────────
+import asyncio
+from webapp.backend import feeds
+
+
+@app.on_event("startup")
+async def start_live_ais():
+    from src import config  # noqa: F401  loads .env when running locally
+    key = os.getenv("AISSTREAM_API_KEY")
+    if key:
+        asyncio.get_running_loop().create_task(feeds.run_aisstream(key))
+
+
+@app.on_event("shutdown")
+def save_live_ais():
+    if feeds.state["configured"]:
+        feeds.save_statics()
+
+
+@app.get("/api/live")
+def live(bbox: str = None, _user: dict = Depends(current_user)):
+    """Newest AIS position per ship, optionally inside bbox=west,south,east,north."""
+    box = None
+    if bbox:
+        try:
+            box = [float(v) for v in bbox.split(",")]
+            assert len(box) == 4
+        except (ValueError, AssertionError):
+            raise HTTPException(422, "Send bbox as west,south,east,north.")
+    vessels, total = feeds.live_vessels(box)
+    return {"source": "aisstream.io", **{k: feeds.state.get(k) for k in ("configured", "connected", "error", "messages", "reconnects")},
+            "in_view": total, "vessels": vessels}
+
+
+@app.get("/api/live/{mmsi}")
+def live_vessel(mmsi: str, _user: dict = Depends(current_user)):
+    """One ship: position plus type, IMO, call sign, size and destination when broadcast."""
+    v = feeds.vessel(mmsi)
+    if not v:
+        raise HTTPException(404, "No recent AIS from this ship.")
+    return v
+
+
+@app.get("/api/live/{mmsi}/extra")
+def live_vessel_extra(mmsi: str, _user: dict = Depends(current_user)):
+    """The slow lookups behind a ship card: GFW identity when AIS static data is missing,
+    and a freely licensed photo (Wikimedia Commons, by IMO)."""
+    v = feeds.vessel(mmsi)
+    if not v:
+        raise HTTPException(404, "No recent AIS from this ship.")
+    ident = None if (v.get("type") and v.get("imo")) else feeds.gfw_identity(mmsi)
+    imo = v.get("imo") or (ident or {}).get("imo")
+    return {"identity": ident, "photo": feeds.photo(imo)}
+
+
+@app.get("/api/news")
+def news(region: str = "all"):
+    """Recent ship-to-ship transfer and sanctions stories (Google News RSS, cached 15 min)."""
+    return feeds.news(region)
+
+
 if (DIST / "assets").exists():
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 

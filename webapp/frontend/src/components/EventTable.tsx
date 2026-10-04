@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
 import { STATUS } from '../status'
+import { Panel } from './Panel'
 
 export const StatusTag: React.FC<{ status: keyof typeof STATUS }> = ({ status }) => (
   <span className="inline-flex items-center gap-2 whitespace-nowrap">
@@ -26,49 +27,49 @@ export const EventTable: React.FC = () => {
   ).slice(0, 50)
 
   return (
-    <section className="panel overflow-hidden">
-      <div className="flex items-center justify-between gap-4 border-b border-rule px-5 py-4">
-        <h2 className="panel-title">Candidates <span className="font-sans text-sm font-normal text-ink-2">{events.length}</span></h2>
-        <label className="flex items-center gap-2 font-mono text-xs uppercase tracking-wider text-ink-2">
-          Sort by
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value as any)} className="field w-auto py-1">
-            <option value="confidence">Confidence</option>
-            <option value="date">Newest</option>
-          </select>
-        </label>
-      </div>
-
+    <Panel
+      title="Candidates"
+      count={events.length}
+      bodyClassName=""
+      right={
+        <select aria-label="Sort candidates" value={sortBy} onChange={(e) => setSortBy(e.target.value as any)}
+          className="border border-rule bg-paper px-1.5 py-0.5 font-mono text-[10px] uppercase text-ink-2 focus:outline-none">
+          <option value="confidence">By confidence</option>
+          <option value="date">Newest</option>
+        </select>
+      }
+    >
       {rows.length ? (
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-paper font-mono text-[11px] uppercase tracking-wider text-ink-2">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-paper text-[10px] uppercase tracking-wider text-ink-3">
               <tr>
                 {['Image time', 'AIS evidence', 'Region', 'Length', 'Confidence', 'GFW'].map((h) => (
-                  <th key={h} className="whitespace-nowrap px-5 py-2.5 font-medium">{h}</th>
+                  <th key={h} className="whitespace-nowrap px-3 py-2 font-medium">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rows.map((e) => (
-                <tr key={e.id} className="cursor-pointer border-t border-rule hover:bg-shoal/60" onClick={() => setSelectedEvent(e)}>
-                  <td className="whitespace-nowrap px-5 py-3">
-                    <button className="text-left text-signal hover:underline" onClick={() => setSelectedEvent(e)}>{formatTime(e.timestamp)}</button>
+                <tr key={e.id} className="cursor-pointer border-t border-rule hover:bg-[#1E1E1E]" onClick={() => setSelectedEvent(e)}>
+                  <td className="whitespace-nowrap px-3 py-2">
+                    <button className="text-left text-ink hover:text-signal" onClick={() => setSelectedEvent(e)}>{formatTime(e.timestamp)}</button>
                   </td>
-                  <td className="px-5 py-3"><StatusTag status={e.status} /></td>
-                  <td className="whitespace-nowrap px-5 py-3">{e.region}</td>
-                  <td className="px-5 py-3">{e.length_estimate} m</td>
-                  <td className="px-5 py-3">{Math.round(e.confidence * 100)}%</td>
-                  <td className="px-5 py-3 text-ink-2">{e.gfw_match ? 'Encounter' : 'None'}</td>
+                  <td className="px-3 py-2"><StatusTag status={e.status} /></td>
+                  <td className="whitespace-nowrap px-3 py-2">{e.region}</td>
+                  <td className="px-3 py-2">{e.length_estimate} m</td>
+                  <td className="px-3 py-2">{Math.round(e.confidence * 100)}%</td>
+                  <td className="px-3 py-2 text-ink-2">{e.gfw_match ? 'Encounter' : 'None'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       ) : (
-        <p className="px-5 py-10 text-center text-ink-2">
+        <p className="px-3 py-8 text-center text-ink-2">
           {useDashboardStore.getState().events.length ? 'No candidates match these filters. Clear filters to see all.' : 'No candidates published yet.'}
         </p>
       )}
-    </section>
+    </Panel>
   )
 }

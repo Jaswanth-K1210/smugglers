@@ -32,20 +32,24 @@ export const Login: React.FC<{ mode: 'login' | 'register' }> = ({ mode }) => {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-4 sm:px-6">
+      <header className="flex h-10 items-center justify-between border-b border-rule bg-surface px-3 sm:px-4">
         <Wordmark />
-        <span className="font-mono text-xs text-ink-2">{clock}</span>
+        <span className="pill">{clock}</span>
       </header>
 
-      <main className="flex flex-1 items-start justify-center px-4 pb-16 pt-8 sm:pt-16">
-        <div className="panel w-full max-w-sm p-6 sm:p-8">
+      <main className="hero-glow flex flex-1 items-start justify-center px-4 pb-16 pt-10 sm:pt-20">
+        <div className="panel w-full max-w-sm">
+          <div className="panel-head">
+            <span className="panel-title">{isRegister ? 'New account' : 'Authentication'}</span>
+          </div>
+          <div className="p-6">
           <p className="font-mono text-xs text-ink-3">
             <span className="text-signal">&gt;</span> {isRegister ? 'register --operator' : 'auth --console'}
           </p>
-          <h1 className="cursor mt-3 font-mono text-2xl font-bold uppercase tracking-tight">
+          <h1 className="mt-3 font-sans text-2xl font-bold">
             {isRegister ? 'Create account' : 'Sign in'}
           </h1>
-          <p className="mt-2 text-sm text-ink-2">
+          <p className="mt-2 font-sans text-sm text-ink-2">
             {isRegister
               ? 'An account opens the console: the map, every candidate, and live detection on your own tiles.'
               : 'Sign in to open the console.'}
@@ -91,6 +95,7 @@ export const Login: React.FC<{ mode: 'login' | 'register' }> = ({ mode }) => {
               {isRegister ? 'Sign in' : 'Create an account'}
             </a>
           </p>
+          </div>
         </div>
       </main>
     </div>

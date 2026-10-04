@@ -19,6 +19,103 @@ api.interceptors.response.use(undefined, (error) => {
   return Promise.reject(typeof detail === 'string' ? new Error(detail) : error)
 })
 
+export type BBox = [number, number, number, number] // west, south, east, north
+
+export interface LiveVessel {
+  mmsi: string
+  name: string | null
+  lat: number
+  lon: number
+  sog: number | null
+  cog: number | null
+  heading: number | null
+  age_s: number
+  group?: string
+}
+
+export interface VesselDetail extends Partial<LiveVessel> {
+  mmsi: string
+  type: string | null
+  type_code?: number | null
+  imo?: number | null
+  callsign?: string | null
+  length_m?: number | null
+  beam_m?: number | null
+  draught_m?: number | null
+  destination?: string | null
+  nav_status?: string | null
+  eta?: string | null
+  flag?: { iso2: string; country: string } | null
+  track?: [number, number][]
+  track_since_s?: number
+}
+
+export interface VesselIdentity {
+  type: string | null
+  imo: number | null
+  callsign: string | null
+  length_m: number | null
+  tonnage_gt: number | null
+  source: string
+}
+
+export interface ShipPhoto {
+  url: string
+  page: string | null
+  author: string | null
+  license: string | null
+  source: string
+}
+
+export interface LiveFeed {
+  configured: boolean
+  connected: boolean
+  error: string | null
+  in_view: number
+  vessels: LiveVessel[]
+}
+
+export interface NewsItem {
+  title: string
+  link: string
+  source: string | null
+  published: string | null
+}
+
+export interface SearchShip {
+  id: number
+  lat: number
+  lon: number
+  length_m: number
+  beam_m: number | null
+  conf: number
+  category: string
+  n_ais: number
+  reasons: string[]
+  chip_png: string | null
+}
+
+export interface SearchResult {
+  scene: { id: string; time: string; platform?: string }
+  bbox: BBox
+  scene_note?: string | null
+  cached: boolean
+  ships: SearchShip[]
+  sts: { lat: number; lon: number; tier: string; spacing_m: number; radar_hulls: number; ais_identities: number | null; without_ais: number | null }[]
+  counts: { ships: number; ais_unmatched: number; sts_pairs: number; sts_pairs_with_silent_hull: number }
+  note: string
+}
+
+export interface SearchJob {
+  job_id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  stage?: string
+  progress: number
+  queue_position?: number
+  error?: string
+  result?: SearchResult
+}
+
 export interface Session {
   token: string
   user: UserProfile
@@ -153,6 +250,32 @@ export const apiService = {
 
   async login(credentials: { email: string; password: string }): Promise<Session> {
     return (await api.post('/auth/login', credentials)).data
+  },
+
+  async getLive(bbox?: BBox): Promise<LiveFeed> {
+    // A zoomed-out map reports longitudes past ±180; the server wants real coordinates.
+    const box = bbox && [Math.max(bbox[0], -180), Math.max(bbox[1], -90), Math.min(bbox[2], 180), Math.min(bbox[3], 90)]
+    return (await api.get('/live', { params: box ? { bbox: box.map((v) => v.toFixed(4)).join(',') } : {} })).data
+  },
+
+  async getVessel(mmsi: string): Promise<VesselDetail> {
+    return (await api.get(`/live/${mmsi}`)).data
+  },
+
+  async getVesselExtra(mmsi: string): Promise<{ identity: VesselIdentity | null; photo: ShipPhoto | null }> {
+    return (await api.get(`/live/${mmsi}/extra`, { timeout: 45000 })).data
+  },
+
+  async getNews(region = 'all'): Promise<{ items: NewsItem[]; error: string | null }> {
+    return (await api.get('/news', { params: { region }, timeout: 15000 })).data
+  },
+
+  async startSearch(bbox: BBox): Promise<{ job_id: string; queue_position: number }> {
+    return (await api.post('/search', { bbox })).data
+  },
+
+  async getSearch(jobId: string): Promise<SearchJob> {
+    return (await api.get(`/search/${jobId}`)).data
   },
 
   async register(details: { name: string; email: string; password: string }): Promise<Session> {

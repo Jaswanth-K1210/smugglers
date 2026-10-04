@@ -7,6 +7,7 @@ argument or put it in code). Uploads only what the image needs, with the
 Dockerfile at the root as Spaces expect, and sets the Space's secrets:
 GFW_API_TOKEN from .env, a random AUTH_SECRET, and HF_MODEL_REPO as a variable.
 """
+import os
 import secrets
 import shutil
 import sys
@@ -62,6 +63,8 @@ def main():
 
     api.add_space_secret(repo, "GFW_API_TOKEN", GFW_API_TOKEN)
     api.add_space_secret(repo, "AUTH_SECRET", secrets.token_hex(32))
+    if os.getenv("AISSTREAM_API_KEY"):              # live ship dots on the console map
+        api.add_space_secret(repo, "AISSTREAM_API_KEY", os.environ["AISSTREAM_API_KEY"])
     api.add_space_variable(repo, "HF_MODEL_REPO", MODEL_REPO)
     host = repo.replace("/", "-").lower()
     print(f"Space: https://huggingface.co/spaces/{repo}")

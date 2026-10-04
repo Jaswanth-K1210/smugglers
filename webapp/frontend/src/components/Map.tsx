@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip, ZoomControl, Rectangle,
 import L from 'leaflet'
 import { useDashboardStore } from '../store/dashboardStore'
 import { STATUS, STATUS_ORDER } from '../status'
-import type { BBox, LiveVessel, SearchResult } from '../services/api'
+import type { BBox, GfwLayers, LiveVessel, SearchResult } from '../services/api'
 
 const SEARCH_COLORS: Record<string, string> = {
   AIS_VISIBLE: STATUS.AIS_VISIBLE.color,
@@ -42,17 +42,35 @@ const DrawBox: React.FC<{ active: boolean; onBox: (b: BBox) => void }> = ({ acti
   return draft ? <Rectangle bounds={draft} pathOptions={{ color: '#44FF88', weight: 1.5, dashArray: '4 4', fillOpacity: 0.06 }} /> : null
 }
 
-// Ship type groups, MarineTraffic-style colours re-stepped to stay apart on the dark map.
-// Red/green still merge for deuteranopes, so tankers also get a white outline.
+// Ship type groups in MarineTraffic's colour conventions, which analysts already read at a
+// glance: pale fill, darker outline of the same hue. Tankers, the class that matters for
+// sanctions work, also get a heavier outline so they do not rely on red alone.
 export const SHIP_GROUPS = [
-  { id: 'cargo', label: 'Cargo', color: '#2E9E4A', members: ['cargo'] },
-  { id: 'tanker', label: 'Tanker', color: '#E5484D', members: ['tanker'] },
-  { id: 'passenger', label: 'Passenger', color: '#3B82F6', members: ['passenger', 'highspeed'] },
-  { id: 'fishing', label: 'Fishing', color: '#B0841C', members: ['fishing'] },
-  { id: 'special', label: 'Tug & special', color: '#B455E0', members: ['special'] },
-  { id: 'other', label: 'Other / unknown', color: '#8A8A8A', members: ['pleasure', 'other', 'unknown'] },
+  { id: 'cargo', label: 'Cargo', fill: '#9BE38F', stroke: '#2F7A26', members: ['cargo'] },
+  { id: 'tanker', label: 'Tanker', fill: '#F0473E', stroke: '#7A120D', members: ['tanker'] },
+  { id: 'passenger', label: 'Passenger', fill: '#2B5BFF', stroke: '#10288A', members: ['passenger'] },
+  { id: 'highspeed', label: 'High-speed craft', fill: '#F5DD45', stroke: '#8C7A10', members: ['highspeed'] },
+  { id: 'special', label: 'Tug & special', fill: '#5FE0E6', stroke: '#16777C', members: ['special'] },
+  { id: 'fishing', label: 'Fishing', fill: '#F7A68A', stroke: '#A64A2C', members: ['fishing'] },
+  { id: 'pleasure', label: 'Pleasure craft', fill: '#D86BEB', stroke: '#7A1E8F', members: ['pleasure'] },
+  { id: 'other', label: 'Other / unknown', fill: '#C9CCD1', stroke: '#5E636B', members: ['other', 'unknown'] },
 ] as const
-const GROUP_COLOR: Record<string, string> = Object.fromEntries(SHIP_GROUPS.flatMap((g) => g.members.map((m) => [m, g.color])))
+const GROUP_STYLE: Record<string, { fill: string; stroke: string }> =
+  Object.fromEntries(SHIP_GROUPS.flatMap((g) => g.members.map((m) => [m, { fill: g.fill, stroke: g.stroke }])))
+
+export const BASEMAPS = {
+  light: {
+    base: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    labels: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+    background: '#F2F3F4',
+  },
+  dark: {
+    base: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    labels: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+    background: '#020A08',
+  },
+} as const
+export type MapStyle = keyof typeof BASEMAPS
 
 // Live ships drawn on one canvas over the tiles: an arrow along the heading when
 // under way, a dot when stopped. 20k ships redraw in a few ms; hover and click are
@@ -83,28 +101,30 @@ const ShipCanvas: React.FC<{ vessels: LiveVessel[]; onPick: (mmsi: string) => vo
     ctx.clearRect(0, 0, w, h)
     const pts: typeof points.current = []
     const zoom = map.getZoom()
-    const k = zoom >= 9 ? 1.25 : zoom >= 6 ? 1 : 0.75
+    const zk = zoom >= 11 ? 1.35 : zoom >= 9 ? 1.15 : zoom >= 6 ? 0.95 : 0.75
     for (const v of data.current) {
       const p = map.latLngToContainerPoint([v.lat, v.lon])
       if (p.x < -10 || p.y < -10 || p.x > w + 10 || p.y > h + 10) continue
       pts.push({ x: p.x, y: p.y, v })
       const dir = v.heading ?? v.cog
-      const tanker = v.group === 'tanker'
-      ctx.fillStyle = GROUP_COLOR[v.group ?? 'unknown'] ?? '#8A8A8A'
-      ctx.strokeStyle = tanker ? '#FFFFFF' : 'rgba(0,0,0,0.65)'
-      ctx.lineWidth = tanker ? 1.3 : 0.8
+      const style = GROUP_STYLE[v.group ?? 'unknown'] ?? GROUP_STYLE.unknown
+      // bigger ships draw bigger, as on MarineTraffic
+      const k = zk * (v.len == null ? 1 : v.len < 40 ? 0.8 : v.len < 120 ? 1 : v.len < 220 ? 1.15 : 1.3)
+      ctx.fillStyle = style.fill
+      ctx.strokeStyle = style.stroke
+      ctx.lineWidth = v.group === 'tanker' ? 1.6 : 1
       ctx.beginPath()
       if ((v.sog ?? 0) >= 0.5 && dir != null) {
         const a = (dir * Math.PI) / 180
         const cos = Math.cos(a), sin = Math.sin(a)
-        const shape: [number, number][] = [[0, -7], [4.2, 5], [0, 2.6], [-4.2, 5]]
+        const shape: [number, number][] = [[0, -8], [4.6, 6], [0, 3.4], [-4.6, 6]]
         shape.forEach(([sx, sy], i) => {
           const x = p.x + (sx * cos - sy * sin) * k, y = p.y + (sx * sin + sy * cos) * k
           i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)
         })
         ctx.closePath()
       } else {
-        ctx.arc(p.x, p.y, 3 * k, 0, Math.PI * 2)
+        ctx.arc(p.x, p.y, 3.2 * k, 0, Math.PI * 2)
       }
       ctx.fill()
       ctx.stroke()
@@ -197,7 +217,9 @@ export const MapComponent: React.FC<{
   track: [number, number][] | null
   hidden: Set<string>
   onToggleGroup: (id: string) => void
-}> = ({ live, drawing, box, onBox, scanning, result, onBounds, focus, fit, onShip, onPickVessel, picked, track, hidden, onToggleGroup }) => {
+  mapStyle: MapStyle
+  gfw: GfwLayers | null
+}> = ({ live, drawing, box, onBox, scanning, result, onBounds, focus, fit, onShip, onPickVessel, picked, track, hidden, onToggleGroup, mapStyle, gfw }) => {
   const events = useDashboardStore((s) => s.getFilteredEvents())
   const selected = useDashboardStore((s) => s.selectedEvent)
   const setSelectedEvent = useDashboardStore((s) => s.setSelectedEvent)
@@ -205,13 +227,11 @@ export const MapComponent: React.FC<{
 
   return (
     <section className="relative h-full">
-      <MapContainer center={[57.75, 10.9]} zoom={7} preferCanvas style={{ height: '100%', width: '100%' }} className="z-0" zoomControl={false}>
+      <MapContainer center={[57.75, 10.9]} zoom={7} preferCanvas style={{ height: '100%', width: '100%', background: BASEMAPS[mapStyle].background }} className="z-0" zoomControl={false}>
         <ZoomControl position="bottomleft" />
-        <TileLayer
-          url="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-          attribution="Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors"
-          maxZoom={16}
-        />
+        <TileLayer key={`${mapStyle}-base`} url={BASEMAPS[mapStyle].base}
+          attribution="Tiles &copy; Esri, HERE, Garmin, OpenStreetMap contributors | AIS: aisstream.io, AISHub via Open Waters, hormuz.now, Global Fishing Watch" maxZoom={16} />
+        <TileLayer key={`${mapStyle}-labels`} url={BASEMAPS[mapStyle].labels} maxZoom={16} />
         <Viewport onBounds={onBounds} focus={focus} fit={fit} />
         <DrawBox active={drawing} onBox={onBox} />
 
@@ -243,6 +263,19 @@ export const MapComponent: React.FC<{
         )}
         {box && scanning && <Sweep box={box} />}
 
+        {gfw?.vessels.map((g) => (
+          <CircleMarker key={`gv-${g.id}`} center={[g.lat, g.lon]} radius={4}
+            pathOptions={{ color: '#0E9AA7', weight: 1.5, fill: false }}>
+            <Tooltip>GFW AIS vessel, last seen {g.time.slice(5, 16).replace('T', ' ')} UTC ({gfw.delay_days} days ago)</Tooltip>
+          </CircleMarker>
+        ))}
+        {gfw?.radar.map((r, i) => (
+          <CircleMarker key={`gr-${i}`} center={[r.lat, r.lon]} radius={r.ais_matched ? 5 : 7}
+            pathOptions={{ color: r.ais_matched ? '#8A8A8A' : '#D9782F', weight: r.ais_matched ? 1 : 2.5, fill: false, dashArray: r.ais_matched ? '2 3' : undefined }}>
+            <Tooltip>GFW radar detection {gfw.day}: {r.ais_matched ? 'matched to AIS' : 'no AIS match'}</Tooltip>
+          </CircleMarker>
+        ))}
+
         {result?.sts.map((s, i) => (
           <CircleMarker key={`sts-${i}`} center={[s.lat, s.lon]} radius={14}
             pathOptions={{ color: '#44FF88', weight: 1.5, dashArray: '3 3', fill: false }}>
@@ -258,7 +291,7 @@ export const MapComponent: React.FC<{
         ))}
       </MapContainer>
 
-      <div className="absolute bottom-7 right-3 z-[400] border border-rule bg-paper/90 px-2.5 py-1.5 text-[11px]">
+      <div className="absolute bottom-7 right-3 z-[400] border border-rule bg-paper/90 px-2.5 py-1.5 text-[11px] md:right-[350px]">
         <p className="mb-1 text-[10px] uppercase tracking-wider text-ink-3">Live ships, click to filter</p>
         <ul className="space-y-0.5">
           {SHIP_GROUPS.map((g) => (
@@ -266,14 +299,24 @@ export const MapComponent: React.FC<{
               <button onClick={() => onToggleGroup(g.id)} aria-pressed={!hidden.has(g.id)}
                 className={`flex items-center gap-2 hover:text-ink ${hidden.has(g.id) ? 'text-ink-3 line-through' : 'text-ink-2'}`}>
                 <svg width="10" height="10" viewBox="-6 -8 12 14" aria-hidden="true">
-                  <path d="M0 -7 L4.2 5 L0 2.6 L-4.2 5 Z" fill={hidden.has(g.id) ? 'transparent' : g.color}
-                    stroke={g.id === 'tanker' ? '#fff' : g.color} strokeWidth="1.2" />
+                  <path d="M0 -7 L4.2 5 L0 2.6 L-4.2 5 Z" fill={hidden.has(g.id) ? 'transparent' : g.fill}
+                    stroke={g.stroke} strokeWidth="1.2" />
                 </svg>
                 {g.label}
               </button>
             </li>
           ))}
         </ul>
+        {gfw && (
+          <>
+            <p className="mb-1 mt-2 text-[10px] uppercase tracking-wider text-ink-3">GFW, {gfw.day} ({gfw.delay_days} d delayed)</p>
+            <ul className="pointer-events-none space-y-0.5">
+              <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full border-[1.5px] border-[#0E9AA7]" />AIS vessel</li>
+              <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full border-[2.5px] border-[#D9782F]" />Radar, no AIS</li>
+              <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full border border-dashed border-[#8A8A8A]" />Radar, AIS matched</li>
+            </ul>
+          </>
+        )}
         <p className="mb-1 mt-2 text-[10px] uppercase tracking-wider text-ink-3">Published candidates</p>
         <ul className="pointer-events-none space-y-0.5">
           {STATUS_ORDER.map((k) => (

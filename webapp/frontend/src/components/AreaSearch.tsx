@@ -58,6 +58,17 @@ const ShipRow: React.FC<{ ship: SearchShip; open: boolean; onToggle: () => void 
           )}
           <ul className="space-y-1 text-[11px] leading-snug text-ink-2">
             {ship.reasons.map((r) => <li key={r}>{r}</li>)}
+            {!!ship.ais_candidates?.length && (
+              <li className="pt-1 text-ink-3">
+                Nearest AIS:{' '}
+                {ship.ais_candidates.map((c) => (
+                  <span key={c.id} className={`mr-2 inline-block ${c.plausible ? 'text-ink-2' : 'line-through'}`}
+                    title={`${c.source}: ${c.minutes_from_pass} min from pass, would need ${c.speed_needed_kn} kn`}>
+                    {c.name ?? 'unnamed'} {(c.distance_m / 1000).toFixed(1)} km{c.size === 'mismatch' ? ' (size differs)' : ''}
+                  </span>
+                ))}
+              </li>
+            )}
           </ul>
         </div>
       )}
@@ -124,7 +135,22 @@ export const AreaSearch: React.FC<{
               </div>
             ))}
           </dl>
+          {result.coverage && result.coverage.label !== 'none' && (
+            <details className="border border-rule px-2 py-1.5 text-[11px]">
+              <summary className="cursor-pointer text-ink-2">
+                AIS coverage:{' '}
+                <span className={result.coverage.label === 'good' ? 'text-signal' : result.coverage.label === 'fair' ? 'text-partial' : 'text-unmatched'}>
+                  {result.coverage.label} ({result.coverage.score.toFixed(2)})
+                </span>
+              </summary>
+              <ul className="mt-1 space-y-0.5 text-ink-3">
+                {result.coverage.factors.map((f) => <li key={f}>{f}</li>)}
+                <li>Low coverage makes "no AIS" weak evidence; it never makes it proof.</li>
+              </ul>
+            </details>
+          )}
           <p className="text-[11px] leading-relaxed text-ink-3">
+            {result.ais_source && <>AIS: {result.ais_source}. </>}
             {result.scene.platform ?? 'Sentinel-1'} pass of {new Date(result.scene.time).toUTCString().slice(5, 22)} UTC
             {result.cached ? ', from an earlier search.' : '.'} {result.scene_note}
           </p>

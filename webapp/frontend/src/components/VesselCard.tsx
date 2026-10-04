@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import { apiService, ShipPhoto, VesselDetail, VesselIdentity } from '../services/api'
+import React, { useEffect, useRef, useState } from 'react'
+import { apiService, Particulars, ShipPhoto, VesselDetail, VesselIdentity } from '../services/api'
 
 const ago = (s?: number) => s === undefined ? null : s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`
 // 'NO' -> 🇳🇴 (regional indicator letters)
@@ -17,15 +17,24 @@ export const VesselCard: React.FC<{
   const [error, setError] = useState<string | null>(null)
   const [photo, setPhoto] = useState<ShipPhoto | null | undefined>(undefined)
   const [ident, setIdent] = useState<VesselIdentity | null>(null)
+  const [part, setPart] = useState<Particulars | null>(null)
+  // 48 h track from Open Waters, kept across the 15 s refreshes (which carry only our own shorter track)
+  const longTrack = useRef<[number, number][]>([])
 
   useEffect(() => {
     let live = true
     const load = () => apiService.getVessel(mmsi)
-      .then((d) => { if (live) { setV(d); setError(null); onLoaded(d) } })
+      .then((d) => {
+        if (!live) return
+        if (longTrack.current.length > (d.track?.length ?? 0)) d = { ...d, track: longTrack.current }
+        setV(d); setError(null); onLoaded(d)
+      })
       .catch((e) => { if (live) setError(e instanceof Error ? e.message : 'Could not load this ship.') })
     setV(null)
     setPhoto(undefined)
     setIdent(null)
+    setPart(null)
+    longTrack.current = []
     load()
     const t = setInterval(load, 15000)   // type, ETA and IMO can arrive a few minutes after the first position
     return () => { live = false; clearInterval(t) }
@@ -37,7 +46,15 @@ export const VesselCard: React.FC<{
     if (!v || photo) return
     let live = true
     apiService.getVesselExtra(mmsi)
-      .then((x) => { if (live) { setIdent(x.identity); setPhoto(x.photo) } })
+      .then((x) => {
+        if (!live) return
+        setIdent(x.identity); setPhoto(x.photo); setPart(x.particulars ?? null)
+        if (x.track && x.track.length > (v.track?.length ?? 0)) {
+          longTrack.current = x.track
+          const withTrack = { ...v, track: x.track, track_since_s: 48 * 3600 }
+          setV(withTrack); onLoaded(withTrack)
+        }
+      })
       .catch(() => live && setPhoto(null))
     return () => { live = false }
   }, [mmsi, !!v, v?.imo]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -47,6 +64,14 @@ export const VesselCard: React.FC<{
   const imo = v?.imo ?? ident?.imo ?? null
   const callsign = v?.callsign ?? ident?.callsign ?? null
   const length = v?.length_m ?? ident?.length_m ?? null
+  // External pages: by MMSI where we have one; regional Gulf ships carry none, so search by name / IMO
+  const regionalShip = mmsi.startsWith('hn:')
+  const q = encodeURIComponent(v?.name ?? '')
+  const marineTraffic = !regionalShip
+    ? `https://www.marinetraffic.com/en/ais/details/ships/mmsi:${mmsi}`
+    : `https://www.marinetraffic.com/en/ais/index/search/all/keyword:${q}`
+  const vesselFinder = imo ? `https://www.vesselfinder.com/vessels/details/${imo}`
+    : regionalShip ? `https://www.vesselfinder.com/vessels?name=${q}` : `https://www.vesselfinder.com/vessels/details/${mmsi}`
   const fromGfw = !!ident && ((!v?.type && !!ident.type) || (!v?.imo && !!ident.imo))
 
   useEffect(() => {
@@ -57,10 +82,11 @@ export const VesselCard: React.FC<{
 
   const details: [string, React.ReactNode][] = v ? [
     ['Flag', v.flag?.country ?? 'Unknown'],
-    ['MMSI', v.mmsi],
+    [regionalShip ? 'Feed ID' : 'MMSI', regionalShip ? v.mmsi.slice(3) : v.mmsi],
     ['IMO', imo ?? '—'],
     ['Call sign', callsign ?? '—'],
     ['Size', length ? `${length} × ${v.beam_m ?? '?'} m` : '—'],
+    ...(v.dwt ? [['Deadweight', `${Math.round(v.dwt).toLocaleString()} t`] as [string, React.ReactNode]] : []),
     ...(ident?.tonnage_gt ? [['Gross tonnage', ident.tonnage_gt.toLocaleString()] as [string, React.ReactNode]] : []),
     ['Position', v.lat != null ? `${v.lat.toFixed(4)}, ${v.lon!.toFixed(4)}` : '—'],
   ] : []
@@ -104,6 +130,14 @@ export const VesselCard: React.FC<{
                 <p className="text-[11px] text-ink-3">
                   {photo === undefined ? 'Looking for a photo…' : imo ? 'No public photo of this ship on Wikimedia Commons' : 'No IMO number known, so no photo lookup'}
                 </p>
+                {photo === null && (
+                  <p className="text-[11px] text-ink-3">
+                    Photos on{' '}
+                    <a className="text-ink-2 underline hover:text-ink" href={marineTraffic} target="_blank" rel="noreferrer">MarineTraffic</a>
+                    {' or '}
+                    <a className="text-ink-2 underline hover:text-ink" href={vesselFinder} target="_blank" rel="noreferrer">VesselFinder</a>
+                  </p>
+                )}
               </div>
             )}
           </figure>
@@ -113,8 +147,7 @@ export const VesselCard: React.FC<{
               className={showTrack ? 'btn-quiet border-signal px-1 text-signal' : 'btn-quiet px-1'}
               title={trackPoints < 2 ? 'Not enough positions recorded yet' : undefined}>Past track</button>
             <button className="btn-quiet px-1" disabled={v.lat == null} onClick={() => onSearchHere(v.lat!, v.lon!)}>Search area</button>
-            <a className="btn-primary px-1" target="_blank" rel="noreferrer"
-              href={`https://www.marinetraffic.com/en/ais/details/ships/mmsi:${v.mmsi}`}>Details ↗</a>
+            <a className="btn-primary px-1" target="_blank" rel="noreferrer" href={marineTraffic}>Details ↗</a>
           </div>
 
           <div className="flex items-end justify-between gap-3 border-b border-rule px-3 py-3">
@@ -147,8 +180,28 @@ export const VesselCard: React.FC<{
             ))}
           </dl>
 
+          {part && (
+            <div className="border-t border-rule px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wider text-ink-3">Registered particulars</p>
+              <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                {([['Builder', part.fields.builder], ['Built', part.fields.year_built],
+                   ['Gross tonnage', part.fields.gross_tonnage != null ? Number(part.fields.gross_tonnage).toLocaleString() : null],
+                   ['Deadweight', part.fields.deadweight != null ? `${Number(part.fields.deadweight).toLocaleString()} t` : null],
+                   ['Registry', part.fields.registry], ['Home port', part.fields.home_port]] as const)
+                  .filter(([, val]) => val != null && val !== '')
+                  .map(([k, val]) => (
+                    <div key={k} className="min-w-0">
+                      <dt className="text-[10px] text-ink-3">{k}</dt>
+                      <dd className="truncate text-ink">{String(val)}</dd>
+                    </div>
+                  ))}
+              </dl>
+              <p className="mt-1 text-[10px] text-ink-3">{part.source}</p>
+            </div>
+          )}
+
           <p className="border-t border-rule px-3 py-2 text-[11px] text-ink-3">
-            Received <span className="text-ink-2">{ago(v.age_s) ?? '—'}</span> (AIS source: aisstream.io, terrestrial)
+            Received <span className="text-ink-2">{ago(v.age_s) ?? '—'}</span> (AIS source: {v.source ?? 'aisstream.io, terrestrial'})
             {fromGfw && <>. Type, IMO or call sign via {ident!.source}</>}
             {trackPoints > 1 && <>. Track covers the last {ago(v.track_since_s)?.replace(' ago', '')}.</>}
           </p>

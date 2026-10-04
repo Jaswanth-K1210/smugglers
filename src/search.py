@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src import context, dark_sts, fetch_s1, gfw, hunt
+from src import context, dark_sts, fetch_s1, gfw, hunt, match, regional_ais
 from src.config import DATA
 
 MIN_KM, MAX_KM = 11, 60       # one 1024 px tile ... the free-CPU time budget
@@ -79,6 +79,10 @@ def pick_scene(items, box, tries=4):
             ais = gfw.ais_presence(t - pd.Timedelta(hours=2), t + pd.Timedelta(hours=2), box)
         except Exception:
             ais = pd.DataFrame()
+        if not len(ais) and regional_window(box, t)[1]:
+            ais = pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"])
+            return item, ais, (None if item is items[0] else
+                               f"Shows the newest pass with recorded AIS ({t:%d %b %H:%M} UTC).")
         if len(ais):
             note = None if item is items[0] else (
                 f"The newest pass ({scene_time(items[0]):%d %b %H:%M} UTC) has no AIS data yet, so this "
@@ -104,13 +108,18 @@ def evidence(ship, sts_note=None, gap=None):
     return tags
 
 
-def reasons(ship, ais_ok, sts_note=None, gap=None, zone=None):
+def reasons(ship, ais_ok, sts_note=None, gap=None, zone=None, sources="Global Fishing Watch", cand_note=None,
+            cover=None):
     """Evidence for one ship, one sentence each."""
     out = []
     if not ais_ok:
         out.append("AIS for this hour is not available yet, so this ship could not be checked against AIS.")
     elif ship["category"] == dark_sts.AIS_UNMATCHED:
-        out.append("No AIS identity within 2 km and ±1 h of the radar pass (AIS source: Global Fishing Watch).")
+        out.append(f"No AIS identity within 2 km and ±1 h of the radar pass (AIS sources: {sources}).")
+        if cover and cover["label"] != "none":
+            out.append(f"AIS coverage here was {cover['label']} ({cover['score']:.2f}), so this absence is "
+                       f"{'strong' if cover['label'] == 'good' else 'weak' if cover['label'] == 'poor' else 'moderate'} "
+                       "evidence about AIS, not about intent.")
     else:
         n = int(ship["n_ais"])
         out.append(f"Matches {n} AIS identit{'y' if n == 1 else 'ies'} within 2 km of the radar position.")
@@ -122,6 +131,8 @@ def reasons(ship, ais_ok, sts_note=None, gap=None, zone=None):
         out.append("Global Fishing Watch's own Sentinel-1 detections also show no AIS match here.")
     if sts_note:
         out.append(sts_note)
+    if cand_note:
+        out.append(cand_note)
     if gap:
         out.append(context.gap_reason(gap))
     if zone:
@@ -144,6 +155,32 @@ def chip_png(tif, x, y, half=60):
     buf = io.BytesIO()
     Image.fromarray(png).save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
+
+
+def regional_window(box, t, minutes=60):
+    """(positions, has_data_at_pass): our recorded Gulf AIS around the pass, if the box is in the Gulf.
+
+    has_data_at_pass needs reports within 30 min of the pass; positions span ±`minutes`
+    so dead reckoning can bring nearby reports to the pass time."""
+    if not regional_ais.covers(box):
+        return None, False
+    pad = 0.15                     # ships just outside the box can still be the hull at its edge
+    w, s, e, n = box
+    reg = regional_ais.load_window(t - pd.Timedelta(minutes=minutes), t + pd.Timedelta(minutes=minutes),
+                                   (w - pad, s - pad, e + pad, n + pad))
+    near = (reg.timestamp - t).abs() <= pd.Timedelta(minutes=30) if len(reg) else []
+    return reg, bool(len(reg) and near.any())
+
+
+def _at_pass(reg, t):
+    """Each regional ship's report nearest the pass, dead-reckoned to the pass time."""
+    if reg is None or not len(reg):
+        return pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"])
+    r = reg.assign(_dt=(reg.timestamp - t).abs()).sort_values("_dt").drop_duplicates("mmsi")
+    moved = [match.project(a.lat, a.lon, a.sog, a.cog, (t - a.timestamp).total_seconds() / 3600)
+             for a in r.itertuples(index=False)]
+    return pd.DataFrame({"mmsi": r.mmsi.to_numpy(), "lat": [m[0] for m in moved], "lon": [m[1] for m in moved],
+                         "timestamp": t})
 
 
 def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
@@ -183,17 +220,33 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
               "cached": False, "ships": [], "sts": []}
     if len(det):
         progress("Matching ships to AIS", 0.6)
-        ais_ok = len(ais) > 0
+        reg, reg_ok = regional_window(box, t)
+        ais_ok = len(ais) > 0 or reg_ok
         res = dark_sts.characterise(det, ais, buffer_m=2000, window_h=1)
+        if reg_ok:
+            # Two sources can report the same ship under different ids (no shared MMSI), so take the
+            # larger count, never the sum: summing would turn one ship into "two identities".
+            reg_res = dark_sts.characterise(det, _at_pass(reg, t), buffer_m=2000, window_h=1)
+            res["n_identities"] = np.maximum(res.n_identities.to_numpy(), reg_res.n_identities.to_numpy())
+            res["mmsis"] = [sorted(set(a) | set(b)) for a, b in zip(res.mmsis, reg_res.mmsis)]
+            res["category"] = [dark_sts.categorise(int(n)) for n in res.n_identities]
         if not ais_ok:
             res["category"] = NOT_AVAILABLE
+        sources = {"Global Fishing Watch": len(ais) > 0}
+        if reg is not None:
+            sources[regional_ais.SOURCE] = reg_ok
+        source_names = ", ".join(k for k, v in sources.items() if v) or "none"
+        result["ais_source"] = source_names + (" (regional feed: " + regional_ais.ATTRIBUTION + ")" if reg_ok else "")
 
         progress("Measuring hulls and looking for ships side by side", 0.75)
         res = hunt.hull_shape(res)
         res["wide"] = False           # one box has too few AIS-matched ships to calibrate width
         sts = hunt.sts_candidates(res)
         if len(sts):
-            sts = hunt.count_identities(sts, res, {res.scene.iloc[0]: ais})
+            # Both sources together: a ship seen by both counts twice here, which can only
+            # understate silent hulls, never invent one.
+            both = pd.concat([ais[["mmsi", "lat", "lon", "timestamp"]], _at_pass(reg, t)]) if reg_ok else ais
+            sts = hunt.count_identities(sts, res, {res.scene.iloc[0]: both})
             sts["tier"] = np.where(sts.evidence.str.contains("rafted"), "A", "B")
 
         progress("Cross-checking with Global Fishing Watch radar detections", 0.85)
@@ -222,6 +275,16 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
                 gaps = context.gap_events(box, t)
             except Exception:
                 gaps = None           # context failing must not fail the search
+        progress("Scoring AIS coverage and nearby AIS candidates", 0.98)
+        gfw_c = ais.assign(sog=np.nan, cog=np.nan, length_m=np.nan, name=None) if len(ais) else None
+        prelim = [{"length_m": float(r.hull_m if r.hull_m == r.hull_m else r.length_m),
+                   "n_ais": int(r.n_identities)} for _, r in res.iterrows()]
+        in_box = max(ais.mmsi.nunique() if len(ais) else 0, reg.mmsi.nunique() if reg_ok else 0)
+        signs = match.jamming_signs(reg) if reg_ok else {}
+        cover = match.coverage(sources, prelim, in_box, signs) if ais_ok else {"score": 0.0, "label": "none",
+                                                                             "factors": []}
+        result["coverage"] = cover
+        result["jamming_signs"] = signs or None
         order = res.assign(_u=(res.category == dark_sts.AIS_UNMATCHED)).sort_values(
             ["_u", "length_m"], ascending=[False, False])
         for n, (i, r) in enumerate(order.iterrows()):
@@ -233,7 +296,16 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
                     "beam_m": None if r.beam_m != r.beam_m else round(float(r.beam_m)),
                     "conf": round(float(r.conf), 3), "category": r.category,
                     "n_ais": int(r.n_identities), "gfw_also_unmatched": bool(r.gfw_also_unmatched)}
-            ship["reasons"] = reasons(ship, ais_ok, notes.get(i), gap, zone)
+            cands = []
+            if ais_ok:
+                hull = ship["length_m"] or None
+                cands = sorted(match.candidates(r.lat, r.lon, t, gfw_c, hull, "Global Fishing Watch")
+                               + (match.candidates(r.lat, r.lon, t, reg, hull, regional_ais.SOURCE) if reg_ok else []),
+                               key=lambda c: (not c["plausible"], c["size"] == "mismatch", c["distance_m"]))
+            ship["ais_candidates"] = cands[:3]
+            ship["coverage"] = cover["label"]
+            ship["reasons"] = reasons(ship, ais_ok, notes.get(i), gap, zone, source_names,
+                                      match.explain(cands), cover)
             ship["evidence"] = evidence(ship, notes.get(i), gap)
             ship["evidence_points"] = len(ship["evidence"])
             ship["zone"] = zone

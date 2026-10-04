@@ -185,8 +185,9 @@ def test_live_ais_thins_evenly_past_the_cap(monkeypatch):
         lat, lon = (1 + k * 1e-5, 1 + k * 1e-5) if k < 1900 else ((k % 10) * 9 + 0.5, (k // 10 % 10) * 9 + 0.5)
         feeds._store({"MetaData": {"MMSI": k, "latitude": lat, "longitude": lon}, "Message": {}}, 1.0)
     v, total = feeds.live_vessels([0, 0, 90, 90], now=1.0)
-    assert total == 2000 and len(v) <= 100
+    assert total == 2000 and len(v) == 100                                # the whole budget is used
     assert max(x["lat"] for x in v) > 45 and max(x["lon"] for x in v) > 45   # far corner still covered
+    assert sum(1 for x in v if x["lat"] < 1.1) > 1                        # busy cell gets the leftover
     feeds.ships.clear()
 
 
@@ -253,14 +254,19 @@ def test_ais_eta():
 def test_ais_static_data_survives_restart(tmp_path, monkeypatch):
     from webapp.backend import feeds
     monkeypatch.setattr(feeds, "STATIC_PATH", tmp_path / "ais_static.json")
-    feeds.statics.clear()
+    monkeypatch.setattr(feeds, "POSITIONS_PATH", tmp_path / "ais_positions.json")
+    feeds.statics.clear(); feeds.ships.clear()
+    feeds._store({"MessageType": "PositionReport", "MetaData": {"MMSI": 311027600, "latitude": 57.8, "longitude": 10.4},
+                  "Message": {"PositionReport": {"Sog": 8.6}}}, time.time())
     feeds.statics[311027600] = {"type_code": 80, "imo": 9466130, "t": time.time()}
     feeds.statics[219000001] = {"type_code": 70, "imo": None, "t": time.time() - feeds.STATIC_TTL - 1}  # expired
     feeds.save_statics()
-    feeds.statics.clear()
+    feeds.statics.clear(); feeds.ships.clear()
     feeds.load_statics()
     assert list(feeds.statics) == [311027600] and feeds.statics[311027600]["imo"] == 9466130
-    feeds.statics.clear()
+    v, _ = feeds.live_vessels()
+    assert v[0]["mmsi"] == "311027600" and v[0]["sog"] == 8.6 and v[0]["group"] == "tanker"
+    feeds.statics.clear(); feeds.ships.clear(); feeds.tracks.clear()
 
 
 def test_gfw_identity_picks_latest_type_and_fills_imo(monkeypatch):
@@ -295,3 +301,81 @@ def test_map_group_falls_back_to_looked_up_gfw_identity():
     feeds._identities["215672000"] = {"type": "Cargo"}
     assert feeds.live_vessels()[0][0]["group"] == "cargo"
     feeds.ships.clear(); feeds._identities.clear()
+
+
+def test_regional_gulf_ships_in_live_map_and_card(client, monkeypatch, tmp_path):
+    from webapp.backend import feeds
+    from src import regional_ais as ra
+    monkeypatch.setattr(ra, "DIR", tmp_path)
+    ra._last_recorded.clear()
+    now = time.time()
+    pos = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now - 120))
+    row = {"id": "hn:6782510", "name": "RAYAH", "lat": 26.2, "lon": 56.4, "sog": 11.0, "cog": 300.0, "heading": None,
+           "pos_time": pos, "category": "tanker", "type": "Tanker", "flag": "SA", "length_m": 333.0, "width_m": 60.0,
+           "dwt": 318990.0, "destination": "SARAZ"}
+    old = dict(row, id="hn:1", pos_time=time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now - 2 * 3600)))
+    feeds.regional.clear(); feeds.regional.update({row["id"]: row, old["id"]: old})
+    ra.record([row], root=tmp_path)
+    v, total = feeds.live_vessels([55, 25, 58, 27], now=now)
+    assert [x["mmsi"] for x in v] == ["hn:6782510"] and total == 1            # stale one hidden
+    assert v[0]["group"] == "tanker" and v[0]["len"] == 333.0 and v[0]["source"] == "hormuz.now"
+    card = client.get("/api/live/hn:6782510").json()
+    assert card["name"] == "RAYAH" and card["flag"] == {"iso2": "SA", "country": feeds.COUNTRY_BY_ISO2["SA"]}
+    assert card["dwt"] == 318990.0 and card["track"][-1] == [26.2, 56.4] and "hormuz.now" in card["source"]
+    feeds.regional.clear()
+
+
+def test_regional_identity_needs_a_unique_exact_name(monkeypatch):
+    from webapp.backend import feeds
+    entries = {"PEARL": [{"selfReportedInfo": [{"shipname": "PEARL", "imo": "9000001"}]},
+                         {"selfReportedInfo": [{"shipname": "PEARL", "imo": "9000002"}]}],
+               "RAYAH": [{"selfReportedInfo": [{"shipname": "RAYAH", "imo": "9779898"}]},
+                         {"selfReportedInfo": [{"shipname": "RAYAH 2", "imo": "1"}]}]}
+    class R:
+        def __init__(self, q): self.q = q
+        def raise_for_status(self): pass
+        def json(self): return {"entries": entries[self.q]}
+    monkeypatch.setattr(feeds.requests, "get", lambda url, params, **k: R(params["query"]))
+    monkeypatch.setattr("src.gfw._headers", lambda: {})
+    feeds._identities.clear(); feeds.regional.clear()
+    feeds.regional.update({"hn:1": {"name": "PEARL"}, "hn:2": {"name": "RAYAH"}})
+    assert feeds.gfw_identity("hn:1") is None                      # two PEARLs: refuse to guess
+    assert feeds.gfw_identity("hn:2")["imo"] == 9779898              # exact and unique
+    feeds._identities.clear(); feeds.regional.clear()
+
+
+def test_gfw_layers_newest_day_with_data_and_radar(client, monkeypatch):
+    import pandas as pd
+    from webapp.backend import feeds
+    from src import gfw
+    calls = []
+    def presence(a, b, box):
+        calls.append(a)
+        if len(calls) < 2:                          # newest lag still empty, the next day has data
+            return pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"])
+        return pd.DataFrame({"mmsi": ["v1", "v1", "v2"], "lat": [26.0, 26.1, 26.2], "lon": [56.0, 56.1, 56.2],
+                             "timestamp": pd.to_datetime(["2026-09-30 01:30", "2026-09-30 05:30", "2026-09-30 02:30"])})
+    monkeypatch.setattr(gfw, "ais_presence", presence)
+    monkeypatch.setattr(gfw, "_report", lambda *a, **k: pd.DataFrame({"lat": [26.1, 26.3], "lon": [55.9, 56.0],
+                                                                      "mmsi": ["", "123"], "detections": [1, 2]}))
+    feeds._gfw_layers.clear()
+    d = client.get("/api/gfw/layers?bbox=55.8,25.8,57.2,26.9").json()
+    assert d["delay_days"] == feeds.GFW_LAG_DAYS[1] and len(d["vessels"]) == 2
+    assert {v["id"]: v["lat"] for v in d["vessels"]}["v1"] == 26.1          # latest position per vessel
+    assert [r["ais_matched"] for r in d["radar"]] == [False, True]
+    assert client.get("/api/gfw/layers?bbox=40,10,60,30").status_code == 422
+    feeds._gfw_layers.clear()
+
+
+def test_ship_search_finds_ships_outside_the_view(client):
+    from webapp.backend import feeds
+    feeds.ships.clear(); feeds.statics.clear(); feeds.regional.clear()
+    feeds._store({"MessageType": "PositionReport", "MetaData": {"MMSI": 311027600, "ShipName": "MARAN PEARY",
+                  "latitude": 57.8, "longitude": 10.4}, "Message": {"PositionReport": {}}}, time.time())
+    feeds.regional["hn:6782510"] = {"id": "hn:6782510", "name": "RAYAH", "lat": 26.2, "lon": 56.4}
+    feeds.regional["hn:2"] = {"id": "hn:2", "name": "RAYAH STAR", "lat": 25.0, "lon": 55.0}
+    r = client.get("/api/live/search?q=rayah").json()["ships"]
+    assert [x["name"] for x in r] == ["RAYAH", "RAYAH STAR"] and r[0]["source"] == "hormuz.now"
+    assert client.get("/api/live/search?q=311027600").json()["ships"][0]["name"] == "MARAN PEARY"
+    assert client.get("/api/live/search?q=x").json()["ships"] == []
+    feeds.ships.clear(); feeds.regional.clear()

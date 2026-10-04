@@ -12,7 +12,8 @@ so they survive restarts and redeploys.
 One container (max_containers=1): the search jobs table is in memory, so the
 poll for a job must reach the container that runs it. It scales to zero after
 10 idle minutes; the first request after that waits ~30 s for a cold start.
-Cost: ~2 CPU-minutes per search, well under a cent.
+Cost: ~2 CPU-minutes per search, well under a cent. The 5-minute Gulf AIS recorder costs a
+few CPU-seconds per run.
 """
 import modal
 
@@ -36,7 +37,9 @@ image = (modal.Image.debian_slim(python_version="3.11")
                "USERS_DB": "/app/data/users.db",
                "HF_HOME": "/app/data/hf",
                "YOLO_CONFIG_DIR": "/app/data/ultralytics",
-               "GFW_RETRY_WAIT": "5"})
+               "GFW_RETRY_WAIT": "5",
+               # the scheduled job below owns the Gulf AIS recording; the web container only reads it
+               "REGIONAL_RECORD": "0"})
          .add_local_dir("src", "/app/src", ignore=["__pycache__"])
          .add_local_dir("webapp/backend", "/app/webapp/backend", ignore=["__pycache__"])
          .add_local_file("outputs/events.geojson", "/app/outputs/events.geojson")
@@ -56,5 +59,24 @@ def web():
     import sys
     sys.path.insert(0, "/app")
     os.chdir("/app")
+    from src import regional_ais
+    regional_ais.before_read = data.reload      # see rows the scheduled recorder committed
     from webapp.backend.app import app as api
     return api
+
+
+@app.function(image=image, volumes={"/app/data": data}, schedule=modal.Period(minutes=5), timeout=120)
+def record_gulf_ais():
+    """Record the Gulf AIS snapshot every 5 min, even while the website sleeps (scale to zero).
+
+    Matching a Sentinel-1 pass over the Gulf needs positions around the pass time, and the
+    regional feed keeps no archive, so gaps here can never be filled later."""
+    import os
+    import sys
+    sys.path.insert(0, "/app")
+    os.chdir("/app")
+    from src import regional_ais
+    data.reload()
+    n = regional_ais.record(regional_ais.fetch_gulf()[0])
+    data.commit()
+    print(f"recorded {n} Gulf AIS rows")

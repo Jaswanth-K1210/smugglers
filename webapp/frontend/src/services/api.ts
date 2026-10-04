@@ -31,6 +31,8 @@ export interface LiveVessel {
   heading: number | null
   age_s: number
   group?: string
+  len?: number | null
+  source?: string
 }
 
 export interface VesselDetail extends Partial<LiveVessel> {
@@ -48,6 +50,8 @@ export interface VesselDetail extends Partial<LiveVessel> {
   flag?: { iso2: string; country: string } | null
   track?: [number, number][]
   track_since_s?: number
+  dwt?: number | null
+  source?: string
 }
 
 export interface VesselIdentity {
@@ -56,6 +60,24 @@ export interface VesselIdentity {
   callsign: string | null
   length_m: number | null
   tonnage_gt: number | null
+  source: string
+}
+
+export interface StraitCrossing {
+  name: string | null
+  category: string | null
+  flag: string | null
+  dwt: number | null
+  length_m: number | null
+  direction: 'inbound' | 'outbound' | string
+  at: string
+  unobserved_h: number | null
+  destination: string | null
+}
+
+export interface Particulars {
+  fields: Partial<Record<'ship_type' | 'builder' | 'year_built' | 'gross_tonnage' | 'deadweight' | 'registry' | 'home_port', string | number>>
+  first_seen?: string | null
   source: string
 }
 
@@ -82,6 +104,28 @@ export interface NewsItem {
   published: string | null
 }
 
+export interface AisCandidate {
+  id: string
+  name: string | null
+  source: string | null
+  distance_m: number
+  minutes_from_pass: number
+  speed_needed_kn: number
+  ais_length_m: number | null
+  size: 'consistent' | 'mismatch' | null
+  plausible: boolean
+}
+
+export interface Coverage { score: number; label: 'good' | 'fair' | 'poor' | 'none'; factors: string[] }
+
+export interface GfwLayers {
+  day: string | null
+  delay_days: number | null
+  source: string
+  vessels: { id: string; lat: number; lon: number; time: string }[]
+  radar: { lat: number; lon: number; ais_matched: boolean; detections: number }[]
+}
+
 export interface SearchShip {
   id: number
   lat: number
@@ -93,6 +137,8 @@ export interface SearchShip {
   n_ais: number
   reasons: string[]
   chip_png: string | null
+  ais_candidates?: AisCandidate[]
+  coverage?: string
 }
 
 export interface SearchResult {
@@ -103,6 +149,8 @@ export interface SearchResult {
   ships: SearchShip[]
   sts: { lat: number; lon: number; tier: string; spacing_m: number; radar_hulls: number; ais_identities: number | null; without_ais: number | null }[]
   counts: { ships: number; ais_unmatched: number; sts_pairs: number; sts_pairs_with_silent_hull: number }
+  coverage?: Coverage
+  ais_source?: string
   note: string
 }
 
@@ -258,12 +306,24 @@ export const apiService = {
     return (await api.get('/live', { params: box ? { bbox: box.map((v) => v.toFixed(4)).join(',') } : {} })).data
   },
 
+  async searchShips(q: string): Promise<{ mmsi: string; name: string | null; lat: number; lon: number; source: string }[]> {
+    return (await api.get('/live/search', { params: { q } })).data.ships
+  },
+
   async getVessel(mmsi: string): Promise<VesselDetail> {
     return (await api.get(`/live/${mmsi}`)).data
   },
 
-  async getVesselExtra(mmsi: string): Promise<{ identity: VesselIdentity | null; photo: ShipPhoto | null }> {
+  async getVesselExtra(mmsi: string): Promise<{ identity: VesselIdentity | null; photo: ShipPhoto | null; track?: [number, number][]; particulars?: Particulars | null }> {
     return (await api.get(`/live/${mmsi}/extra`, { timeout: 45000 })).data
+  },
+
+  async getGfwLayers(bbox: BBox): Promise<GfwLayers> {
+    return (await api.get('/gfw/layers', { params: { bbox: bbox.map((v) => v.toFixed(2)).join(',') }, timeout: 120000 })).data
+  },
+
+  async getStraitCrossings(hours = 48): Promise<{ hours: number; crossings: StraitCrossing[]; source: string }> {
+    return (await api.get('/strait/crossings', { params: { hours }, timeout: 30000 })).data
   },
 
   async getNews(region = 'all'): Promise<{ items: NewsItem[]; error: string | null }> {

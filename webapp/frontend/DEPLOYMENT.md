@@ -19,7 +19,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000 in your browser. The dev server proxies API calls to http://localhost:8000.
+Open http://localhost:5173 in your browser. The dev server proxies API calls to http://localhost:8000.
 
 ## Project Structure
 

@@ -41,7 +41,7 @@ npm install
 npm run dev
 ```
 
-The dev server will start at `http://localhost:3000` and proxy API requests to `http://localhost:8000`.
+The dev server will start at `http://localhost:5173` and proxy API requests to `http://localhost:8000`.
 
 ## Build
 

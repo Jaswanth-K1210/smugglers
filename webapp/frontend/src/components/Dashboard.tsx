@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useDashboardStore, STSEvent } from '../store/dashboardStore'
-import { apiService, BBox, LiveFeed, SearchJob, VesselDetail } from '../services/api'
-import MapComponent, { SHIP_GROUPS } from './Map'
+import { apiService, BBox, GfwLayers, LiveFeed, SearchJob, VesselDetail } from '../services/api'
+import MapComponent, { MapStyle, SHIP_GROUPS } from './Map'
 import { AreaSearch } from './AreaSearch'
 import { SearchBox } from './SearchBox'
 import { News } from './News'
 import { Menu } from './Menu'
 import { VesselCard } from './VesselCard'
+import { StraitPanel } from './StraitPanel'
 import { EventTable } from './EventTable'
 import { ConfidenceChart, TimeSeriesChart } from './Charts'
 import { FilterPanel } from './Filters'
@@ -53,6 +54,17 @@ export const Dashboard: React.FC = () => {
   const [picked, setPicked] = useState<VesselDetail | null>(null)
   const onVesselLoaded = useCallback((v: VesselDetail) => setPicked(v), [])
   const [showTrack, setShowTrack] = useState(false)
+  const [mapStyle, setMapStyle] = useState<MapStyle>(() => {
+    try { return localStorage.getItem('sts_map_style') === 'dark' ? 'dark' : 'light' } catch { return 'light' }
+  })
+  const switchMap = () => setMapStyle((m) => {
+    const next = m === 'light' ? 'dark' : 'light'
+    try { localStorage.setItem('sts_map_style', next) } catch { /* private mode: per-session only */ }
+    return next
+  })
+  const [showGfw, setShowGfw] = useState(false)
+  const [gfw, setGfw] = useState<GfwLayers | null>(null)
+  const [gfwMsg, setGfwMsg] = useState<string | null>(null)
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set())
   const toggleGroup = (id: string) => setHiddenGroups((h) => { const n = new Set(h); n.has(id) ? n.delete(id) : n.add(id); return n })
   const closeVessel = useCallback(() => { setPickedMmsi(null); setPicked(null); setShowTrack(false) }, [])
@@ -75,6 +87,27 @@ export const Dashboard: React.FC = () => {
     const interval = setInterval(load, 15000)
     return () => clearInterval(interval)
   }, [bounds])
+
+  // GFW layers for the view, on request: days delayed, slow on first load, cached by the server
+  useEffect(() => {
+    if (!showGfw || !bounds) { setGfw(null); setGfwMsg(null); return }
+    if (bounds[2] - bounds[0] > 5 || bounds[3] - bounds[1] > 5) {
+      setGfw(null); setGfwMsg('Zoom in to load GFW layers (up to 5° × 5°).'); return
+    }
+    let live = true
+    setGfwMsg('Loading GFW satellite AIS and radar detections… (first load can take ~30 s)')
+    const t = setTimeout(() => {
+      apiService.getGfwLayers(bounds)
+        .then((d) => {
+          if (!live) return
+          setGfw(d)
+          setGfwMsg(d.day ? `GFW ${d.day} (${d.delay_days} days delayed): ${d.vessels.length} AIS vessels, ${d.radar.length} radar detections, ${d.radar.filter((r) => !r.ais_matched).length} without AIS`
+            : 'GFW has no AIS for this view in the last week.')
+        })
+        .catch((e) => live && setGfwMsg(e instanceof Error ? e.message : 'GFW did not answer.'))
+    }, 800)
+    return () => { live = false; clearTimeout(t) }
+  }, [showGfw, bounds])
 
   // Poll the running area search; the scanner animates until it settles
   useEffect(() => {
@@ -141,6 +174,9 @@ export const Dashboard: React.FC = () => {
             { label: 'Run detection on a tile', onSelect: () => scrollTo('detect') },
             { label: 'Candidates table', onSelect: () => scrollTo('candidates') },
             { label: 'Sanctions news', onSelect: () => scrollTo('news') },
+            { label: 'Strait of Hormuz crossings', onSelect: () => scrollTo('strait') },
+            { label: mapStyle === 'light' ? 'Switch to dark map' : 'Switch to light map', onSelect: switchMap },
+            { label: showGfw ? 'Hide GFW layers' : 'Show GFW satellite AIS + radar (delayed)', onSelect: () => setShowGfw((g) => !g) },
             'divider',
             { label: 'Export candidates as CSV', disabled: !filtered.length, onSelect: () => download(toCSV(filtered), 'text/csv', 'csv') },
             { label: 'Export candidates as JSON', disabled: !filtered.length, onSelect: () => download(JSON.stringify(filtered, null, 2), 'application/json', 'json') },
@@ -170,9 +206,14 @@ export const Dashboard: React.FC = () => {
             onBounds={setBounds} focus={focus} fit={fit} onShip={setOpenShip}
             onPickVessel={(m) => { setPickedMmsi(m); setShowTrack(false) }}
             picked={picked?.lat != null ? { lat: picked.lat, lon: picked.lon! } : null}
-            track={showTrack ? picked?.track ?? null : null} hidden={hiddenGroups} onToggleGroup={toggleGroup} />
+            track={showTrack ? picked?.track ?? null : null} hidden={hiddenGroups} onToggleGroup={toggleGroup} mapStyle={mapStyle} gfw={showGfw ? gfw : null} />
         </div>
 
+        {showGfw && gfwMsg && (
+          <p role="status" className="absolute bottom-3 left-1/2 z-[400] max-w-[60%] -translate-x-1/2 border border-rule bg-paper/90 px-3 py-1.5 text-center text-[11px] text-ink-2">
+            {gfwMsg}
+          </p>
+        )}
         <dl className="pointer-events-none absolute left-3 top-3 z-[400] grid grid-cols-2 border border-rule bg-paper/90 sm:grid-cols-4">
           {stats.map(([label, value]) => (
             <div key={label} className="border-rule px-3 py-2 [&:not(:last-child)]:border-r">
@@ -190,7 +231,7 @@ export const Dashboard: React.FC = () => {
         )}
 
         <aside className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:right-3 md:top-3 md:w-[330px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
-          <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} />
+          <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />
           <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
             job={job} stages={stages} openShip={openShip} onShip={setOpenShip} />
           <FilterPanel />
@@ -200,6 +241,15 @@ export const Dashboard: React.FC = () => {
       <main className="grid flex-1 content-start gap-1 bg-paper p-1 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
         <div id="news" className="col-span-full lg:col-span-2 lg:row-span-2">
           <News className="h-full" />
+        </div>
+        <div id="strait" className="col-span-full lg:col-span-2 lg:row-span-2">
+          <StraitPanel className="h-full" onShip={async (name) => {
+            try {
+              const hits = await apiService.searchShips(name)
+              const hit = hits.find((h) => (h.name ?? '').toUpperCase() === name.toUpperCase()) ?? hits[0]
+              if (hit) { setFocus({ lat: hit.lat, lon: hit.lon, zoom: 10 }); setPickedMmsi(hit.mmsi); setShowTrack(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+            } catch { /* not on the live map right now */ }
+          }} />
         </div>
         <Panel title="AIS evidence" count={events.length}>
           {events.length ? <CategoryBar counts={counts} /> : <p className="text-xs text-ink-2">No candidates loaded.</p>}

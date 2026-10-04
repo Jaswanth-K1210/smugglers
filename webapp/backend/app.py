@@ -419,6 +419,9 @@ async def start_live_ais():
     key = os.getenv("AISSTREAM_API_KEY")
     if key:
         asyncio.get_running_loop().create_task(feeds.run_aisstream(key))
+    if os.getenv("REGIONAL_AIS", "1") != "0":    # Gulf coverage aisstream lacks; off in tests
+        asyncio.get_running_loop().create_task(feeds.run_regional())
+        asyncio.get_running_loop().create_task(feeds.run_openwaters())
 
 
 @app.on_event("shutdown")
@@ -438,8 +441,15 @@ def live(bbox: str = None, _user: dict = Depends(current_user)):
         except (ValueError, AssertionError):
             raise HTTPException(422, "Send bbox as west,south,east,north.")
     vessels, total = feeds.live_vessels(box)
-    return {"source": "aisstream.io", **{k: feeds.state.get(k) for k in ("configured", "connected", "error", "messages", "reconnects")},
+    return {"source": "aisstream.io", "regional": feeds.regional_state, "openwaters": feeds.openwaters_state,
+            **{k: feeds.state.get(k) for k in ("configured", "connected", "error", "messages", "reconnects")},
             "in_view": total, "vessels": vessels}
+
+
+@app.get("/api/live/search")
+def live_search(q: str, _user: dict = Depends(current_user)):
+    """Find a ship anywhere by name or MMSI, not only in the current view."""
+    return {"ships": feeds.search_ships(q)}
 
 
 @app.get("/api/live/{mmsi}")
@@ -460,7 +470,40 @@ def live_vessel_extra(mmsi: str, _user: dict = Depends(current_user)):
         raise HTTPException(404, "No recent AIS from this ship.")
     ident = None if (v.get("type") and v.get("imo")) else feeds.gfw_identity(mmsi)
     imo = v.get("imo") or (ident or {}).get("imo")
-    return {"identity": ident, "photo": feeds.photo(imo)}
+    track = []
+    if not str(mmsi).startswith("hn:"):
+        try:                                     # 48 h from Open Waters beats our since-restart track
+            from src import openwaters
+            track = openwaters.track(mmsi)
+        except Exception:
+            track = []
+    return {"identity": ident, "photo": feeds.photo(imo), "track": track,
+            "particulars": None if str(mmsi).startswith("hn:") else feeds.particulars(mmsi)}
+
+
+@app.get("/api/gfw/layers")
+def gfw_layers(bbox: str, _user: dict = Depends(current_user)):
+    """GFW satellite AIS and radar detections for the view, a few days delayed (context, not live)."""
+    try:
+        box = [float(v) for v in bbox.split(",")]
+        assert len(box) == 4
+    except (ValueError, AssertionError):
+        raise HTTPException(422, "Send bbox as west,south,east,north.")
+    try:
+        return feeds.gfw_layers(box)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(503, f"Global Fishing Watch did not answer ({type(e).__name__}). Try again shortly.")
+
+
+@app.get("/api/strait/crossings")
+def strait_crossings(hours: int = 48, _user: dict = Depends(current_user)):
+    """Strait of Hormuz crossings with how long each ship went unobserved while crossing."""
+    try:
+        return feeds.strait_crossings(hours)
+    except Exception as e:
+        raise HTTPException(503, f"The crossings feed did not answer ({type(e).__name__}). Try again shortly.")
 
 
 @app.get("/api/news")

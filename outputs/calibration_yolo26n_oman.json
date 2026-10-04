@@ -1,0 +1,129 @@
+{
+ "model": "yolo26n",
+ "region": "oman",
+ "period": [
+  "2026-07-01",
+  "2026-09-26"
+ ],
+ "scenes": 26,
+ "visible_ais_ships": 6518,
+ "area_km2": 86866,
+ "selected": {
+  "threshold": 0.1,
+  "recall": 0.834,
+  "ais_confirmed_share": 0.625,
+  "min_confirmed": 0.6
+ },
+ "table": [
+  {
+   "threshold": 0.05,
+   "n_det": 10576,
+   "n_ais": 6518,
+   "matched": 5695,
+   "unmatched_det": 4881,
+   "recall": 0.874,
+   "ais_confirmed_share": 0.538,
+   "unmatched_per_1000km2": 56.2,
+   "f1_vs_ais": 0.666
+  },
+  {
+   "threshold": 0.1,
+   "n_det": 8704,
+   "n_ais": 6518,
+   "matched": 5439,
+   "unmatched_det": 3265,
+   "recall": 0.834,
+   "ais_confirmed_share": 0.625,
+   "unmatched_per_1000km2": 37.6,
+   "f1_vs_ais": 0.715
+  },
+  {
+   "threshold": 0.15,
+   "n_det": 7719,
+   "n_ais": 6518,
+   "matched": 5189,
+   "unmatched_det": 2530,
+   "recall": 0.796,
+   "ais_confirmed_share": 0.672,
+   "unmatched_per_1000km2": 29.1,
+   "f1_vs_ais": 0.729
+  },
+  {
+   "threshold": 0.2,
+   "n_det": 7014,
+   "n_ais": 6518,
+   "matched": 4901,
+   "unmatched_det": 2113,
+   "recall": 0.752,
+   "ais_confirmed_share": 0.699,
+   "unmatched_per_1000km2": 24.3,
+   "f1_vs_ais": 0.725
+  },
+  {
+   "threshold": 0.25,
+   "n_det": 6391,
+   "n_ais": 6518,
+   "matched": 4631,
+   "unmatched_det": 1760,
+   "recall": 0.71,
+   "ais_confirmed_share": 0.725,
+   "unmatched_per_1000km2": 20.3,
+   "f1_vs_ais": 0.717
+  },
+  {
+   "threshold": 0.3,
+   "n_det": 5843,
+   "n_ais": 6518,
+   "matched": 4343,
+   "unmatched_det": 1500,
+   "recall": 0.666,
+   "ais_confirmed_share": 0.743,
+   "unmatched_per_1000km2": 17.3,
+   "f1_vs_ais": 0.702
+  },
+  {
+   "threshold": 0.35,
+   "n_det": 5252,
+   "n_ais": 6518,
+   "matched": 4012,
+   "unmatched_det": 1240,
+   "recall": 0.616,
+   "ais_confirmed_share": 0.764,
+   "unmatched_per_1000km2": 14.3,
+   "f1_vs_ais": 0.682
+  },
+  {
+   "threshold": 0.4,
+   "n_det": 4541,
+   "n_ais": 6518,
+   "matched": 3566,
+   "unmatched_det": 975,
+   "recall": 0.547,
+   "ais_confirmed_share": 0.785,
+   "unmatched_per_1000km2": 11.2,
+   "f1_vs_ais": 0.645
+  },
+  {
+   "threshold": 0.45,
+   "n_det": 3655,
+   "n_ais": 6518,
+   "matched": 2967,
+   "unmatched_det": 688,
+   "recall": 0.455,
+   "ais_confirmed_share": 0.812,
+   "unmatched_per_1000km2": 7.9,
+   "f1_vs_ais": 0.583
+  },
+  {
+   "threshold": 0.5,
+   "n_det": 2476,
+   "n_ais": 6518,
+   "matched": 2076,
+   "unmatched_det": 400,
+   "recall": 0.319,
+   "ais_confirmed_share": 0.838,
+   "unmatched_per_1000km2": 4.6,
+   "f1_vs_ais": 0.462
+  }
+ ]
+}

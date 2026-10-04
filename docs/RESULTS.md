@@ -336,6 +336,61 @@ labels are densest.
 highest overall and new-region vessel mAP50, and among the two fastest on CPU.
 RT-DETR-l is reported as the accuracy reference.
 
+## 7. Served detector (YOLO26n) recall against AIS, scene level
+
+`src/evaluate.py` + `modal_eval.py`. 26 Sentinel-1 passes over the Fujairah region
+(`hunt.REGIONS["oman"]`, Jul-Sep 2026, real-footprint coverage >= 50 %; 4 of 30 lost to
+GFW rate limits). Reference set: every AIS ship (GFW presence, +-1 h, one position per
+ship) inside the true strip footprint, on a valid pixel, >= 1 km from land: **6,518 ships
+over 86,866 km2**. Detections at score >= 0.05 after the same land / length /
+infrastructure filters as the website, matched to AIS **one-to-one, closest first,
+within 1.5 km** (presence cells are ~1.1 km; loose "any AIS within 2 km" matching would
+let one blob count for several anchored ships).
+
+| Score >= | Detections | AIS recall | AIS-confirmed share | Unmatched / 1000 km2 | F1 vs AIS |
+| -------- | ---------- | ---------- | ------------------- | -------------------- | --------- |
+| 0.05 | 10,576 | 0.874 | 0.538 | 56.2 | 0.666 |
+| 0.10 | 8,704 | 0.834 | 0.625 | 37.6 | 0.715 |
+| **0.15** | 7,719 | **0.796** | 0.672 | 29.1 | **0.729** |
+| 0.20 | 7,014 | 0.752 | 0.699 | 24.3 | 0.725 |
+| 0.25 | 6,391 | 0.710 | 0.725 | 20.3 | 0.717 |
+| 0.30 | 5,843 | 0.666 | 0.743 | 17.3 | 0.702 |
+| **0.40 (served)** | 4,541 | **0.547** | 0.785 | 11.2 | 0.645 |
+| 0.50 | 2,476 | 0.319 | 0.838 | 4.6 | 0.462 |
+
+Recall by distance from shore at 0.40: 1-3 km **0.011** (267 ships), 3-10 km 0.586
+(1,038), > 10 km 0.567 (5,213). At 0.15: 0.097 / 0.772 / 0.837.
+
+**Reading.**
+- The served threshold (0.40, inherited from RT-DETR) finds **55 %** of visible AIS
+  ships. F1 against AIS peaks at **0.15 (recall 0.80, F1 0.729)**. "Highest recall with
+  >= 60 % AIS-confirmed" selects 0.10; with a 65 % floor, 0.15.
+- AIS-confirmed share is a **lower bound on precision**: an unconfirmed detection is
+  either a false alarm or a genuine AIS-unmatched ship, and this experiment cannot tell
+  which. Lowering the threshold to 0.15 multiplies unmatched candidates 2.6x (11 -> 29
+  per 1000 km2).
+- Ships 1-3 km from shore are almost never found (1-10 %): moored at quays or close
+  inshore, where land clutter and the 1 km land filter dominate. Near-shore claims
+  should not be made.
+- The earlier live "75 ships vs ~217 AIS" was not a recall figure: different footprint,
+  no land or validity filter, no one-to-one matching.
+
+**Caveats that limit the claim.**
+1. **In-training region.** The multi-region detector was trained on pseudo-labels from
+   these same Oman months (§6), so this is in-region recall and likely optimistic. The
+   geographic test (sealed region, research rule 6) is still to do.
+2. **Research rule 5.** `RESEARCH_POSITION.md` says no GFW-derived product trains or
+   tunes the detector. The §6 pseudo-labels were confirmed with GFW AIS presence, and
+   choosing a threshold from this table would tune on GFW AIS too. Either the rule is
+   amended (GFW *presence* is AIS positions, the only AIS outside Denmark; the rule's
+   intent was GFW's derived classifications) or calibration moves to Skagen with DMA
+   AIS. Undecided.
+3. Size, type and incidence angle were not measured: GFW presence carries no length or
+   type, and incidence needs the GRD annotation files.
+
+Calibration saved to `outputs/calibration_yolo26n_oman.json`; the selection rule is
+tested in `tests/test_detector_calibration.py`.
+
 ## 5. CDSE σ⁰ VV+VH vs Planetary Computer DN VV
 
 *Pending* — one-scene cost and quality check first (`src/fetch_cdse.py`), then a

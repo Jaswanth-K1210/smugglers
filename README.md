@@ -42,14 +42,18 @@ reception, and abundant only in a poorly-covered control.
 | 1 AIS ingest + STS extraction | **PASS** | 42,557 raw events / 7 days; 188 at sea |
 | 2 Sentinel-1 acquisition | **PASS** | Skagen anchorage imaged, ~30 ships at anchor |
 | 3 Auto-labeling | **PASS** | 100% of boxes ≥20 dB over background (≥70% needed) |
-| 4 Training | code ready | **untested — `torch` has no wheel for Python 3.13 on Intel macOS** |
+| 4 Training | **done** (Colab) | Skagen RT-DETR; then multi-region (Skagen + Oman + Laconia), five detectors compared — RESULTS §3, §6, §6b |
 | 5 False-positive control | code + tests | land, length, static-infrastructure masks |
 | 6 Identity characterisation | code + tests | four specified cases pass |
 | 7 Suspicion scoring | code + tests | triage order, not a probability |
 | 8 Pipeline + dashboard | runs end to end | `outputs/events.geojson` |
-| 9 Web deployment | code ready | not yet deployed |
+| 9 Web deployment | **deployed** (Modal) | area-on-demand search, live AIS map, accounts |
+| Region search | done | Gulf of Oman, Laconia; STS candidates with the one-hull rule — RESULTS §4c–4g |
+| Recall vs AIS | measured | YOLO26n, 26 Fujairah passes: 71 % at the served 0.25 (calibration, not final accuracy) — RESULTS §7 |
 
-50 tests pass locally. Phase 4 has never been executed anywhere.
+159 backend tests and 12 frontend tests pass; `scripts/check_live.py` runs 18
+end-to-end checks against the deployed site. Training needs a GPU and runs in
+Colab (`torch` has no wheel for Python 3.13 on Intel macOS).
 
 ---
 
@@ -58,7 +62,7 @@ reception, and abundant only in a poorly-covered control.
 ```bash
 pip install -r requirements.txt
 cp .env.example .env          # add GFW_API_TOKEN and AOI_BBOX
-pytest -q                     # 50 tests, no network or credentials needed
+pytest -q                     # 159 tests, no network or credentials needed
 ```
 
 ```bash
@@ -96,7 +100,10 @@ When something fails, paste the **entire traceback**, not the last line.
 | ------ | ---- | -------- |
 | [Planetary Computer](https://planetarycomputer.microsoft.com/dataset/sentinel-1-grd) `sentinel-1-grd` | **none** | Sentinel-1 GRD |
 | Danish Maritime Authority AIS (S3) | **none** | training labels, identity evidence |
-| [Global Fishing Watch](https://globalfishingwatch.org/our-apis/) v3 | token | comparison layers, registry |
+| [Global Fishing Watch](https://globalfishingwatch.org/our-apis/) v3 | token | AIS presence outside Denmark, SAR detections, gap/encounter events, registry |
+| hormuz.now, Open Waters, aisstream.io | none / free key | Gulf and live AIS for the map and matching |
+| [Marine Regions](https://www.marineregions.org/) | none | territorial sea / EEZ context |
+| Sentinel-2 L2A (Planetary Computer) | none | optical cross-check of STS candidates |
 
 CDSE Sentinel Hub was the original plan and proved unusable — its OAuth endpoint
 returned 503 throughout and registration never completed. Planetary Computer
@@ -124,68 +131,78 @@ src/
   validate_gfw.py  GFW encounter/gap cross-check
   enrich_gfw.py    registry lookup, or a size class and nothing more
   score.py         triage scoring, every term kept and explainable
-  run_pipeline.py  phases 2–7 end to end
+  run_pipeline.py  phases 2–7 end to end; detector over every tile, strip edges excluded
   dashboard.py     Folium map
-webapp/            FastAPI backend + Leaflet frontend + Dockerfile
+  gfw.py           GFW presence (AIS outside Denmark), SAR detections, events
+  hunt.py          region search: AIS-unmatched ships and STS candidates (tiers A/B/C)
+  pseudo.py        new-region training tiles from AIS-confirmed detections
+  search.py        area-on-demand search behind the website: one box in, ships + reasons out
+  match.py         radar-to-AIS matching with dead reckoning, feasibility, size, coverage
+  context.py       nearby GFW AIS gap events and maritime zone (Marine Regions)
+  regional_ais.py  Gulf AIS snapshots (recorded every 5 min on Modal)
+  openwaters.py    Open Waters shore-receiver AIS
+  optical.py       Sentinel-2 cross-check of STS candidates
+  evaluate.py      scene-level recall against AIS, threshold selection rule
+  review.py        blind review sheet for choosing the cut-off (test plan T3)
+  model_select.py  detector families, trained on Skagen + Oman, tested on Laconia
+webapp/            FastAPI backend (app.py, feeds.py) + React frontend
+modal_app.py       deployment on Modal; modal_eval.py, modal_review.py run experiments there
+scripts/           check_live.py (live end-to-end checks), deploy_space.py (HF Space, PRO only)
 notebooks/         Colab notebooks, one per heavy phase
-docs/              research position, plan, data-source record
-tests/             50 tests
+docs/              research position, results log, plan, data-source record
+tests/             159 tests
 ```
 
 ---
 
 ## Deployment
 
-Precomputed results, served fast. No GPU, no scene fetched per request.
-
-**Hugging Face Spaces (Docker)** is the recommended target: 2 vCPU / 16 GB free,
-enough RAM for the optional live endpoint. Render's free tier is 512 MB, which
-`torch` alone exceeds. Vercel caps serverless bundles at 250 MB, so it can host
-the frontend only.
+Live at **https://jaswanth-k1210--darksts-web.modal.run**: one Modal app serves the
+FastAPI backend and the built React site from the same URL (serverless CPU, $30/month
+free credits, scales to zero; ~30 s cold start). The detector is downloaded from the
+Hugging Face model repo `Jaswanth-K/darksts-detector`. Accounts and the search cache
+live on a Modal volume; the Gulf AIS recorder runs every 5 minutes on its own volume.
 
 ```bash
-docker build -f webapp/Dockerfile -t darksts .
-docker run -p 7860:7860 darksts
+pip install modal && modal setup             # once
+(cd webapp/frontend && npm run build)        # the website
+modal deploy modal_app.py                    # secrets come from the local .env at deploy time
+python3 scripts/check_live.py                # 18 end-to-end checks against the live site
 ```
 
 | Endpoint | Returns |
 | -------- | ------- |
-| `GET /api/health` | status, event count, whether live detection is available |
-| `GET /api/events` | precomputed candidates, filterable by category and score |
-| `GET /api/summary` | counts by category and size class |
-| `POST /api/detect` | runs the detector on one uploaded tile, on CPU |
+| `POST /api/search` | starts a search over `{"bbox": [west, south, east, north]}` (11–60 km a side, sign-in) |
+| `GET /api/search/{id}` | progress stage, then ships with reasons, evidence points, radar chips, STS pairs |
+| `GET /api/live` | live AIS positions for the map |
+| `GET /api/events` | precomputed candidates |
+| `GET /api/health` | status and whether search is available |
+| `POST /api/auth/register`, `/login` | accounts (rate-limited) |
 
-`/api/detect` needs weights in the image; without them it returns a clear 503 and
-the precomputed endpoints keep working.
-
----
+A search picks the newest Sentinel-1 pass that covers at least half the box by its
+real footprint and already has AIS, runs the detector, matches AIS, measures hulls,
+looks for side-by-side pairs and writes one sentence per piece of evidence.
+Hugging Face Docker Spaces now need PRO; `scripts/deploy_space.py` is kept as a paid
+fallback.
 
 ## Detector families
 
-Nothing is trained yet — `models/` is empty and no Space is deployed. The
-benchmark compares CNNs against one transformer detector on the same split:
+Trained and compared on the same scene-level split (RESULTS §3 Skagen only, §6b
+Skagen + Oman + Laconia):
 
-| Family | Kind | Role |
-| ------ | ---- | ---- |
-| `yolov8n` | CNN | the originally specified baseline |
-| `yolo11n` | CNN | modern baseline |
-| `yolo12n` | CNN with attention modules | candidate |
-| `rtdetr-l` | **transformer (DETR-style)** | the transformer arm |
+| Model | Vessel mAP50, new regions | CPU s / tile | Role |
+| ----- | ------------------------- | ------------ | ---- |
+| RT-DETR-l | 0.512 | 3.49 | accuracy reference (best on Skagen, 0.475) |
+| YOLOv8n | 0.532 | 0.30 | |
+| YOLO11n | 0.523 | 0.40 | |
+| YOLO12n | 0.546 | 0.79 | |
+| **YOLO26n** | **0.558** | 0.31 | **served** |
 
-```bash
-python -m src.train --benchmark yolov8n yolo11n yolo12n rtdetr-l
-python -m src.train --available          # what this ultralytics build supports
-```
-
-**Winning the benchmark and being deployed are separate decisions.**
-`deploy_choice()` measures CPU latency per model and reports both rankings: the
-most accurate, and the most accurate that fits a CPU budget. `/api/detect` runs
-on two shared vCPUs, so the served model will likely be a small CNN even if the
-transformer wins the table. Report the accurate one; ship the fast one.
-
-Architecture is not currently the binding constraint — measured vessel boxes run
-19–33 px and the length-gate floor is 3 px, so scene count and small-object
-handling dominate. Benchmarking across 20 tiles from one scene measures noise.
+On 25 new-region tiles the five are within noise of each other; CPU speed decided.
+The `sts` class is unreliable in every model (11 validation instances), so STS comes
+from geometry (pairs, hull width, radar-vs-AIS counting), not from the class.
+New-region labels are detections confirmed by GFW AIS presence; that exception to
+research rule 5 is disclosed in `docs/RESEARCH_POSITION.md`.
 
 ## Calibration knobs
 
@@ -198,6 +215,7 @@ swept in `docs/RESEARCH_POSITION.md` §4.6.
 | land clearance | 1 km | totals fall 569→188 from 0.5→1 km while tanker events hold at 71 |
 | STS buffer | 500 m | **specified, not yet swept** |
 | AIS window | ±12 h | **least justified constant in the project** |
+| vessel cut-off (YOLO26n) | 0.25 | 71 % AIS recall vs 55 % at 0.40 (RESULTS §7); 0.15–0.25 shown only as hidden weak candidates until reviewed precision (T3) |
 
 ---
 

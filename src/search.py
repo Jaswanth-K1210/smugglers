@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src import dark_sts, fetch_s1, gfw, hunt
+from src import context, dark_sts, fetch_s1, gfw, hunt
 from src.config import DATA
 
 MIN_KM, MAX_KM = 11, 60       # one 1024 px tile ... the free-CPU time budget
@@ -88,7 +88,23 @@ def pick_scene(items, box, tries=4):
         "AIS for the recent passes over this box is not available yet; ships are shown unchecked.")
 
 
-def reasons(ship, ais_ok, sts_note=None):
+def evidence(ship, sts_note=None, gap=None):
+    """Tags for the evidence points that make an AIS-unmatched ship worth review."""
+    if ship["category"] != dark_sts.AIS_UNMATCHED:
+        return []
+    tags = ["no_ais"]
+    if ship["length_m"] and ship["length_m"] >= 100:
+        tags.append("large_ship")
+    if ship.get("gfw_also_unmatched"):
+        tags.append("gfw_radar_agrees")
+    if sts_note:
+        tags.append("hull_alongside")
+    if gap:
+        tags.append("nearby_ais_gap")
+    return tags
+
+
+def reasons(ship, ais_ok, sts_note=None, gap=None, zone=None):
     """Evidence for one ship, one sentence each."""
     out = []
     if not ais_ok:
@@ -106,7 +122,11 @@ def reasons(ship, ais_ok, sts_note=None):
         out.append("Global Fishing Watch's own Sentinel-1 detections also show no AIS match here.")
     if sts_note:
         out.append(sts_note)
-    out.append(f"Detector confidence {ship['conf']:.2f}.")
+    if gap:
+        out.append(context.gap_reason(gap))
+    if zone:
+        out.append(zone)
+    out.append(f"Detector score {ship['conf']:.2f} (how sure the model is that this is a ship, not a probability).")
     return out
 
 
@@ -195,15 +215,31 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
                     if s.tier == "A" else f"Another hull {s.spacing_m:.0f} m away (within 500 m).")
             for i in res.index[hunt.near(s.lat, s.lon, res.lat, res.lon) <= max(s.spacing_m, 50) / 2 + 30]:
                 notes[i] = note
+        gaps = None
+        if ais_ok and (res.category == dark_sts.AIS_UNMATCHED).any():
+            progress("Looking for nearby AIS gap events and maritime zones", 0.97)
+            try:
+                gaps = context.gap_events(box, t)
+            except Exception:
+                gaps = None           # context failing must not fail the search
         order = res.assign(_u=(res.category == dark_sts.AIS_UNMATCHED)).sort_values(
             ["_u", "length_m"], ascending=[False, False])
         for n, (i, r) in enumerate(order.iterrows()):
+            unmatched = r.category == dark_sts.AIS_UNMATCHED
+            gap = context.nearest_gap(r.lat, r.lon, t, gaps) if unmatched else None
+            zone = context.zone_reason(context.zone_at(r.lat, r.lon)) if unmatched and n < CHIPS else None
             ship = {"id": int(n), "lat": round(float(r.lat), 5), "lon": round(float(r.lon), 5),
                     "length_m": round(float(r.hull_m if r.hull_m == r.hull_m else r.length_m)),
                     "beam_m": None if r.beam_m != r.beam_m else round(float(r.beam_m)),
                     "conf": round(float(r.conf), 3), "category": r.category,
                     "n_ais": int(r.n_identities), "gfw_also_unmatched": bool(r.gfw_also_unmatched)}
-            ship["reasons"] = reasons(ship, ais_ok, notes.get(i))
+            ship["reasons"] = reasons(ship, ais_ok, notes.get(i), gap, zone)
+            ship["evidence"] = evidence(ship, notes.get(i), gap)
+            ship["evidence_points"] = len(ship["evidence"])
+            ship["zone"] = zone
+            ship["nearby_ais_gap"] = None if not gap else {
+                "vessel": gap["name"] or None, "mmsi": gap["mmsi"], "flag": gap["flag"],
+                "km": round(gap["km"], 1), "hours_before_pass": round(gap["hours"], 1)}
             ship["chip_png"] = chip_png(tif, r.x, r.y) if n < CHIPS else None
             result["ships"].append(ship)
         result["sts"] = [{"lat": round(float(s.lat), 5), "lon": round(float(s.lon), 5),

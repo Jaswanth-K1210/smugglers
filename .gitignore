@@ -20,3 +20,6 @@ runs/
 !outputs/events.csv
 __MACOSX/
 !webapp/frontend/public/*.jpg
+
+# T3 review key: reviewers must never see it (send it separately)
+bench/*/KEY_reviewers_do_not_open/

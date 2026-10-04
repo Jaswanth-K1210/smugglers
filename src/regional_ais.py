@@ -20,6 +20,7 @@ import csv
 import gzip
 import math
 import time
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -36,7 +37,7 @@ SOURCE = "hormuz.now"
 COVERAGE = (47.3, 22.3, 61.0, 30.3)
 UA = {"User-Agent": "OpenSTS/1.0 (https://github.com/Jaswanth-K1210/smugglers)"}
 
-DIR = DATA / "regional_ais"
+DIR = Path(os.getenv("REGIONAL_AIS_DIR", DATA / "regional_ais"))   # own Modal volume in deployment
 RECORD_EVERY_MIN = 15
 RETAIN_DAYS = 30
 MAX_LENGTH_M = 460          # longer than any ship afloat: a bad record, not a ship

@@ -26,6 +26,10 @@ OUT = ROOT / "outputs"
 WEIGHTS = ROOT / "models" / "darksts" / "weights" / "best.pt"
 
 
+MIN_VALID = 0.2      # a tile needs this much radar coverage to be searched
+EDGE_PX = 20         # detections within ~200 m of no-data are the strip edge, not ships
+
+
 def tile_starts(n: int, size: int = 1024):
     """Tile offsets covering 0..n, the last tile shifted back to end at n.
 
@@ -50,7 +54,8 @@ def detect(tif: Path, weights: Path = WEIGHTS, conf: float = 0.25, size: int = 1
             for left in tile_starts(src.width, size):
                 win = rasterio.windows.Window(left, top, size, size)
                 img = src.read(1, window=win)
-                if (img > 0).mean() < 0.9:
+                valid = img > 0
+                if valid.mean() < MIN_VALID:
                     continue
                 v = img[img > 0]
                 lo, hi = np.percentile(v, [1, 99])
@@ -59,6 +64,10 @@ def detect(tif: Path, weights: Path = WEIGHTS, conf: float = 0.25, size: int = 1
 
                 for b in model.predict(rgb, conf=conf, verbose=False)[0].boxes:
                     x0, y0, x1, y1 = b.xyxy[0].tolist()
+                    r, c = int((y0 + y1) / 2), int((x0 + x1) / 2)
+                    near = valid[max(r - EDGE_PX, 0):r + EDGE_PX, max(c - EDGE_PX, 0):c + EDGE_PX]
+                    if near.size == 0 or near.mean() < 0.95:
+                        continue            # on the edge of the radar strip: the edge itself, not a ship
                     cls = autolabel.CLASSES_INV[int(b.cls[0])]
                     cx, cy = left + (x0 + x1) / 2, top + (y0 + y1) / 2
                     X, Y = src.transform * (cx, cy)

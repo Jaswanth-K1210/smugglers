@@ -91,6 +91,12 @@ def overlap(item, box=None) -> float:
     cross — often solid land. Rank by overlap instead.
     """
     lo_lon, lo_lat, hi_lon, hi_lat = box or default_bbox()
+    if item.get("geometry"):
+        # The real footprint: an IW strip is tilted, so its bounding box can
+        # claim 70 % coverage of a box the strip only clips (14 % in one case).
+        from shapely.geometry import box as rect, shape
+        aoi = rect(lo_lon, lo_lat, hi_lon, hi_lat)
+        return shape(item["geometry"]).intersection(aoi).area / aoi.area
     b = item["bbox"]
     w = max(0.0, min(b[2], hi_lon) - max(b[0], lo_lon))
     h = max(0.0, min(b[3], hi_lat) - max(b[1], lo_lat))

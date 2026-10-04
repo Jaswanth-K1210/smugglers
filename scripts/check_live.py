@@ -1,0 +1,87 @@
+"""End-to-end check of the deployed site: website, API, model, outside data sources.
+
+    python3 scripts/check_live.py [base_url]
+
+Creates one throwaway account and runs one real search (~3 min). Prints PASS /
+FAIL per check and exits non-zero if any check fails.
+"""
+import re
+import secrets
+import sys
+import time
+
+import requests
+
+B = (sys.argv[1] if len(sys.argv) > 1 else "https://jaswanth-k1210--darksts-web.modal.run").rstrip("/")
+BOX = [56.35, 25.05, 56.65, 25.35]              # Fujairah anchorage, ~30 x 33 km: always busy
+results = []
+
+
+def check(name, ok, detail=""):
+    results.append(ok)
+    print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  ({detail})" if detail else ""))
+
+
+def main():
+    t = time.time()
+    h = requests.get(f"{B}/api/health", timeout=180).json()
+    check("server up, model available", h.get("search_available") is True, f"{time.time() - t:.0f}s, {h.get('status')}")
+
+    page = requests.get(B + "/", timeout=60)
+    check("website served", page.ok and "<!doctype html" in page.text.lower())
+    js = re.search(r'src="(/assets/[^"]+\.js)"', page.text)
+    check("website script loads", bool(js) and requests.get(B + js.group(1), timeout=60).ok)
+
+    probe = requests.get(B + "/..%2F..%2F..%2Fdata%2Fusers.db", timeout=60)
+    check("private files not served", "SQLite" not in probe.text and "CREATE TABLE" not in probe.text)
+    check("search refuses anonymous users", requests.post(f"{B}/api/search", json={"bbox": BOX},
+                                                          timeout=60).status_code == 401)
+
+    email, pw = f"check-{secrets.token_hex(4)}@example.org", secrets.token_urlsafe(12)
+    r = requests.post(f"{B}/api/auth/register", json={"name": "Live check", "email": email, "password": pw}, timeout=60)
+    check("sign up", r.ok, r.text[:80] if not r.ok else "")
+    r = requests.post(f"{B}/api/auth/login", json={"email": email, "password": pw}, timeout=60)
+    check("sign in", r.ok)
+    H = {"Authorization": f"Bearer {r.json()['token']}"} if r.ok else {}
+    check("session", requests.get(f"{B}/api/auth/me", headers=H, timeout=60).json().get("user", {}).get("email") == email)
+
+    ev = requests.get(f"{B}/api/events", headers=H, timeout=60)
+    check("precomputed results", ev.ok and len(ev.json().get("features", [])) > 0)
+    news = requests.get(f"{B}/api/news", timeout=60)
+    check("news feed", news.ok and isinstance(news.json().get("items"), list), f"{len(news.json().get('items', []))} items")
+    live = requests.get(f"{B}/api/live", headers=H, timeout=60)
+    check("live AIS feed", live.ok, f"connected={live.json().get('connected')}, in view={live.json().get('in_view')}")
+
+    bad = requests.post(f"{B}/api/search", json={"bbox": [56.4, 25.1, 56.41, 25.11]}, headers=H, timeout=60)
+    check("tiny box refused with a reason", bad.status_code == 422 and "at least" in bad.json().get("detail", ""))
+
+    job = requests.post(f"{B}/api/search", json={"bbox": BOX}, headers=H, timeout=120)
+    check("search starts", job.ok, job.text[:80] if not job.ok else "")
+    if not job.ok:
+        return
+    job_id, t, last = job.json()["job_id"], time.time(), None
+    while time.time() - t < 900:
+        j = requests.get(f"{B}/api/search/{job_id}", headers=H, timeout=60).json()
+        if j.get("stage") != last:
+            print(f"        {time.time() - t:4.0f}s  {j.get('stage')}")
+            last = j.get("stage")
+        if j["status"] in ("done", "error"):
+            break
+        time.sleep(3)
+    check("search finishes", j["status"] == "done", j.get("error") or f"{time.time() - t:.0f}s")
+    if j["status"] != "done":
+        return
+    res = j["result"]
+    ships = res["ships"]
+    check("model found ships", len(ships) > 0, f"{res['counts']}")
+    check("every ship has reasons", all(s["reasons"] for s in ships))
+    text = " ".join(" ".join(s["reasons"]) for s in ships).lower()
+    check("no 'dark' wording", "dark" not in text)
+    check("radar chips attached", any(s.get("chip_png") for s in ships))
+    print(f"        scene {res['scene']['time']}  {res.get('scene_note') or ''}")
+
+
+if __name__ == "__main__":
+    main()
+    print(f"\n{sum(results)}/{len(results)} checks passed")
+    sys.exit(0 if all(results) else 1)

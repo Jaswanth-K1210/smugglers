@@ -39,7 +39,8 @@ image = (modal.Image.debian_slim(python_version="3.11")
                "YOLO_CONFIG_DIR": "/app/data/ultralytics",
                "GFW_RETRY_WAIT": "5",
                # the scheduled job below owns the Gulf AIS recording; the web container only reads it
-               "REGIONAL_RECORD": "0"})
+               "REGIONAL_RECORD": "0",
+               "REGIONAL_AIS_DIR": "/app/ais"})
          .add_local_dir("src", "/app/src", ignore=["__pycache__"])
          .add_local_dir("webapp/backend", "/app/webapp/backend", ignore=["__pycache__"])
          .add_local_file("outputs/events.geojson", "/app/outputs/events.geojson")
@@ -48,9 +49,13 @@ image = (modal.Image.debian_slim(python_version="3.11")
 
 app = modal.App("darksts")
 data = modal.Volume.from_name("darksts-data", create_if_missing=True)
+# The Gulf AIS recording gets its own volume: the website reloads it to see the
+# recorder's new rows, and a reload makes every file on that volume briefly
+# unopenable, which on the shared volume broke the user database mid-search.
+ais = modal.Volume.from_name("darksts-ais", create_if_missing=True)
 
 
-@app.function(image=image, cpu=2, memory=4096, timeout=900, volumes={"/app/data": data},
+@app.function(image=image, cpu=2, memory=4096, timeout=900, volumes={"/app/data": data, "/app/ais": ais},
               secrets=[modal.Secret.from_dict(values)], max_containers=1, scaledown_window=600)
 @modal.concurrent(max_inputs=50)
 @modal.asgi_app()
@@ -60,12 +65,12 @@ def web():
     sys.path.insert(0, "/app")
     os.chdir("/app")
     from src import regional_ais
-    regional_ais.before_read = data.reload      # see rows the scheduled recorder committed
+    regional_ais.before_read = ais.reload      # see rows the scheduled recorder committed
     from webapp.backend.app import app as api
     return api
 
 
-@app.function(image=image, volumes={"/app/data": data}, schedule=modal.Period(minutes=5), timeout=120)
+@app.function(image=image, volumes={"/app/ais": ais}, schedule=modal.Period(minutes=5), timeout=120)
 def record_gulf_ais():
     """Record the Gulf AIS snapshot every 5 min, even while the website sleeps (scale to zero).
 
@@ -76,7 +81,7 @@ def record_gulf_ais():
     sys.path.insert(0, "/app")
     os.chdir("/app")
     from src import regional_ais
-    data.reload()
+    ais.reload()
     n = regional_ais.record(regional_ais.fetch_gulf()[0])
-    data.commit()
+    ais.commit()
     print(f"recorded {n} Gulf AIS rows")

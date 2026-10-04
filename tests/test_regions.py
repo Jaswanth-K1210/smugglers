@@ -57,3 +57,12 @@ def test_one_token_per_container(monkeypatch):
     fetch_s1.sign("https://acct.blob.core.windows.net/cont/c.tif")
     assert a == "https://acct.blob.core.windows.net/cont/a/b.tif?sig=x"
     assert calls == [f"{fetch_s1.TOKEN}/acct/cont"]
+
+
+def test_overlap_uses_the_real_footprint():
+    from src.fetch_s1 import overlap
+    box = (0.0, 0.0, 1.0, 1.0)
+    sliver = {"bbox": [0.0, 0.0, 1.0, 1.0],                  # bounding box claims full cover
+              "geometry": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.3, 0.0], [0.0, 0.3], [0.0, 0.0]]]}}
+    assert abs(overlap(sliver, box) - 0.045) < 1e-9
+    assert overlap({"bbox": [0.0, 0.0, 1.0, 1.0]}, box) == 1.0   # no geometry: old behaviour

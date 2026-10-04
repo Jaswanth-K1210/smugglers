@@ -33,6 +33,7 @@ MIN_OVERLAP = 0.5
 CACHE = DATA / "search_cache"
 CHIPS = 40                    # image chips returned, AIS-unmatched first
 NOT_AVAILABLE = "AIS_NOT_AVAILABLE"
+CACHE_VERSION = 2             # bump when results change, so stale cached searches are not served
 
 
 def box_km(box):
@@ -196,7 +197,7 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
                           f"{LOOKBACK_DAYS} days. Try a box further from the coast or a bit larger.")
     progress("Checking which pass already has AIS data", 0.1)
     item, ais, scene_note = pick_scene(items, box)
-    key = f"{item['id']}_{'_'.join(f'{v:.3f}' for v in box)}"
+    key = f"v{CACHE_VERSION}_{item['id']}_{'_'.join(f'{v:.3f}' for v in box)}"
     hit = Path(cache) / f"{key}.json"
     if hit.exists():
         progress("Found an earlier search of this pass", 1.0)

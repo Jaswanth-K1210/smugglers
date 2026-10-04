@@ -14,3 +14,4 @@ python-dotenv
 rasterio
 global-land-mask
 huggingface_hub
+shapely

@@ -66,3 +66,15 @@ def test_overlap_uses_the_real_footprint():
               "geometry": {"type": "Polygon", "coordinates": [[[0.0, 0.0], [0.3, 0.0], [0.0, 0.3], [0.0, 0.0]]]}}
     assert abs(overlap(sliver, box) - 0.045) < 1e-9
     assert overlap({"bbox": [0.0, 0.0, 1.0, 1.0]}, box) == 1.0   # no geometry: old behaviour
+
+
+def test_image_server_refusal_becomes_a_message(monkeypatch):
+    import pytest
+    from src import fetch_s1
+    class R:
+        status_code = 403
+    monkeypatch.setattr(fetch_s1, "_tokens", {})
+    monkeypatch.setattr(fetch_s1.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fetch_s1.requests, "get", lambda *a, **k: R())
+    with pytest.raises(LookupError, match="limiting requests"):
+        fetch_s1.sign("https://acct.blob.core.windows.net/cont/a.tif")

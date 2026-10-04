@@ -106,6 +106,10 @@ def overlap(item, box=None) -> float:
 _tokens = {}
 
 
+class ImageServerBusy(LookupError):
+    """Planetary Computer refused a token; a LookupError, so the website shows the message."""
+
+
 def sign(href: str) -> str:
     """Planetary Computer SAS signing, one token per storage container.
 
@@ -116,11 +120,18 @@ def sign(href: str) -> str:
     key = (host.split(".")[0], container)
     tok, expiry = _tokens.get(key, (None, pd.Timestamp(0, tz="UTC")))
     if expiry - pd.Timestamp.now(tz="UTC") < pd.Timedelta(minutes=5):
+        # A free Planetary Computer key raises the anonymous limits; 403 as well as 429
+        # comes back when one network address asks too often (seen from Modal).
+        head = {"Ocp-Apim-Subscription-Key": os.environ["PC_SDK_SUBSCRIPTION_KEY"]} \
+            if os.getenv("PC_SDK_SUBSCRIPTION_KEY") else {}
         for i in range(5):
-            r = requests.get(f"{TOKEN}/{key[0]}/{key[1]}", timeout=60)
-            if r.status_code != 429:
+            r = requests.get(f"{TOKEN}/{key[0]}/{key[1]}", headers=head, timeout=60)
+            if r.status_code not in (403, 429):
                 break
             time.sleep(10 * (i + 1))
+        if r.status_code in (403, 429):
+            raise ImageServerBusy("The satellite image server (Planetary Computer) is limiting requests "
+                                  "right now. Try again in a few minutes.")
         r.raise_for_status()
         j = r.json()
         tok, expiry = j["token"], pd.Timestamp(j["msft:expiry"])

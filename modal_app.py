@@ -23,6 +23,8 @@ if modal.is_local():                          # deploy time only: read .env, kee
     if not GFW_API_TOKEN:
         raise SystemExit("GFW_API_TOKEN is empty in .env; the backend needs it for AIS.")
     import os
+    if os.getenv("PC_SDK_SUBSCRIPTION_KEY"):  # free Planetary Computer key: higher download limits
+        values["PC_SDK_SUBSCRIPTION_KEY"] = os.environ["PC_SDK_SUBSCRIPTION_KEY"]
     if os.getenv("AISSTREAM_API_KEY"):        # live ship dots on the map; optional
         values["AISSTREAM_API_KEY"] = os.environ["AISSTREAM_API_KEY"]
     values["GFW_API_TOKEN"] = GFW_API_TOKEN

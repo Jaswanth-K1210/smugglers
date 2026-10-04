@@ -14,8 +14,6 @@ poll for a job must reach the container that runs it. It scales to zero after
 10 idle minutes; the first request after that waits ~30 s for a cold start.
 Cost: ~2 CPU-minutes per search, well under a cent.
 """
-import hashlib
-
 import modal
 
 values = {}
@@ -26,9 +24,8 @@ if modal.is_local():                          # deploy time only: read .env, kee
     import os
     if os.getenv("AISSTREAM_API_KEY"):        # live ship dots on the map; optional
         values["AISSTREAM_API_KEY"] = os.environ["AISSTREAM_API_KEY"]
-    values |= {"GFW_API_TOKEN": GFW_API_TOKEN,
-              # stable across deploys, so sign-ins survive; derived, not stored
-              "AUTH_SECRET": hashlib.sha256(f"darksts-auth:{GFW_API_TOKEN}".encode()).hexdigest()}
+    values["GFW_API_TOKEN"] = GFW_API_TOKEN
+    # no AUTH_SECRET here: the app makes a random one on the volume and keeps it
 
 image = (modal.Image.debian_slim(python_version="3.11")
          .apt_install("libgl1", "libglib2.0-0")

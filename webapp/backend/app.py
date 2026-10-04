@@ -20,7 +20,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,8 +31,24 @@ WEIGHTS = Path(os.getenv("WEIGHTS_PATH", ROOT / "models" / "darksts" / "weights"
 FRONTEND = ROOT / "webapp" / "frontend"
 DIST = FRONTEND / "dist"
 USERS_DB = Path(os.getenv("USERS_DB", ROOT / "data" / "users.db"))
-# ponytail: without AUTH_SECRET every restart signs everyone out; set it in deployment.
-AUTH_SECRET = (os.getenv("AUTH_SECRET") or secrets.token_hex(32)).encode()
+
+
+def _auth_secret() -> bytes:
+    """AUTH_SECRET from the environment, else a random one kept next to the user DB."""
+    if os.getenv("AUTH_SECRET"):
+        return os.environ["AUTH_SECRET"].encode()
+    f = USERS_DB.parent / "auth_secret"
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if not f.exists():
+            f.write_text(secrets.token_hex(32))
+            f.chmod(0o600)
+        return f.read_text().strip().encode()
+    except OSError:                                 # read-only disk: sessions end at restart
+        return secrets.token_hex(32).encode()
+
+
+AUTH_SECRET = _auth_secret()
 TOKEN_TTL = 7 * 24 * 3600
 
 app = FastAPI(title="Dark STS Detection", version="1.0",
@@ -136,17 +152,39 @@ def current_user(authorization: str = Header(None)):
     raise HTTPException(401, "Sign in to continue.")
 
 
+_attempts = {}                                      # client -> recent auth attempt times
+AUTH_LIMIT, AUTH_WINDOW = 10, 300
+
+
+def _throttle(request: Request):
+    """At most AUTH_LIMIT sign-in / sign-up attempts per client per AUTH_WINDOW seconds.
+
+    ponytail: in-memory and keyed on the forwarded IP, which a client can spoof;
+    enough to stop casual password guessing on one container.
+    """
+    ip = (request.headers.get("x-forwarded-for") or (request.client.host if request.client else "?"))
+    ip = ip.split(",")[0].strip()
+    now = time.time()
+    recent = [t for t in _attempts.get(ip, []) if now - t < AUTH_WINDOW]
+    if len(recent) >= AUTH_LIMIT:
+        raise HTTPException(429, "Too many attempts. Wait a few minutes and try again.")
+    _attempts[ip] = recent + [now]
+
+
 def _session(email: str):
     return {"token": _token(email), "user": _user(email)}
 
 
 @app.post("/api/auth/register")
-def auth_register(payload: dict):
+def auth_register(payload: dict, request: Request):
+    _throttle(request)
     email = str(payload.get("email", "")).strip().lower()
     name = str(payload.get("name", "")).strip()
     password = str(payload.get("password", ""))
     if "@" not in email or not name:
         raise HTTPException(422, "Enter your name and a valid email address.")
+    if len(email) > 254 or len(name) > 100 or len(password) > 256:
+        raise HTTPException(422, "Name, email or password is too long.")
     if len(password) < 8:
         raise HTTPException(422, "Use a password of at least 8 characters.")
     salt = secrets.token_bytes(16)
@@ -159,7 +197,8 @@ def auth_register(payload: dict):
 
 
 @app.post("/api/auth/login")
-def auth_login(payload: dict):
+def auth_login(payload: dict, request: Request):
+    _throttle(request)
     email = str(payload.get("email", "")).strip().lower()
     with _db() as db:
         row = db.execute("SELECT salt, hash FROM users WHERE email = ?", (email,)).fetchone()
@@ -243,6 +282,9 @@ def summary():
                     "candidate, not a finding of concealment."}
 
 
+MAX_UPLOAD = 10 * 1024 * 1024
+
+
 @app.post("/api/detect")
 async def detect(file: UploadFile = File(...), _user: dict = Depends(current_user)):
     """Run the detector on one uploaded tile, on CPU."""
@@ -251,10 +293,17 @@ async def detect(file: UploadFile = File(...), _user: dict = Depends(current_use
     import time
     import numpy as np
     from PIL import Image
-    from ultralytics import YOLO
 
     t0 = time.time()
-    img = Image.open(io.BytesIO(await file.read())).convert("RGB")
+    data = await file.read(MAX_UPLOAD + 1)
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, "Upload an image of at most 10 MB.")
+    Image.MAX_IMAGE_PIXELS = 50_000_000             # refuse decompression bombs
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        raise HTTPException(422, "That file is not an image we can read (use PNG, JPEG or TIFF).")
+    from ultralytics import YOLO
     res = YOLO(str(weights)).predict(np.array(img), conf=0.25, verbose=False)[0]
     names = {0: "vessel", 1: "sts"}
     detections = [{
@@ -285,7 +334,9 @@ HF_MODEL_REPO = os.getenv("HF_MODEL_REPO")            # e.g. "<user>/darksts-det
 SEARCH_WEIGHTS = os.getenv("SEARCH_WEIGHTS", "best.pt")
 _executor = ThreadPoolExecutor(max_workers=1)
 _jobs, _jobs_lock = {}, threading.Lock()
-MAX_JOBS = 100
+MAX_JOBS = 500
+MAX_QUEUE = 5                 # searches waiting or running, all users together
+DAILY_SEARCHES = 20           # per account; each costs ~2 CPU-minutes of free credit
 
 
 def search_weights() -> Path:
@@ -329,7 +380,16 @@ def start_search(payload: dict, user: dict = Depends(current_user)):
     weights = search_weights()
     job_id = uuid.uuid4().hex[:12]
     with _jobs_lock:
-        ahead = sum(j["status"] in ("queued", "running") for j in _jobs.values())
+        active = [j for j in _jobs.values() if j["status"] in ("queued", "running")]
+        if any(j["user"] == user["email"] for j in active):
+            raise HTTPException(429, "You already have a search running. Wait for it to finish.")
+        if len(active) >= MAX_QUEUE:
+            raise HTTPException(503, "The search service is busy. Try again in a few minutes.")
+        today = [j for j in _jobs.values()
+                 if j["user"] == user["email"] and time.time() - j["created"] < 86400]
+        if len(today) >= DAILY_SEARCHES:
+            raise HTTPException(429, f"Daily limit of {DAILY_SEARCHES} searches reached. Try again tomorrow.")
+        ahead = len(active)
         _jobs[job_id] = {"job_id": job_id, "status": "queued", "bbox": list(box), "progress": 0.0,
                          "stage": "Waiting for the previous search to finish" if ahead else "Starting",
                          "queue_position": ahead, "user": user["email"], "created": time.time()}
@@ -406,7 +466,10 @@ def live_vessel_extra(mmsi: str, _user: dict = Depends(current_user)):
 @app.get("/api/news")
 def news(region: str = "all"):
     """Recent ship-to-ship transfer and sanctions stories (Google News RSS, cached 15 min)."""
-    return feeds.news(region)
+    out = feeds.news(region)
+    # links come from an outside feed; a "javascript:" link would run in our page
+    out["items"] = [i for i in out.get("items", []) if str(i.get("link") or "").startswith(("https://", "http://"))]
+    return out
 
 
 if (DIST / "assets").exists():
@@ -417,8 +480,9 @@ if DIST.exists() and (DIST / "index.html").exists():
     def serve_dist(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(404, "Not Found")
-        file_path = DIST / full_path
-        if file_path.is_file():
+        # resolve() and the containment check stop "/..%2F..%2F.env" walking out of dist/
+        file_path = (DIST / full_path).resolve()
+        if file_path.is_file() and file_path.is_relative_to(DIST.resolve()):
             return FileResponse(file_path)
         return FileResponse(DIST / "index.html")
 elif FRONTEND.exists():

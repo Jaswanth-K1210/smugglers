@@ -33,7 +33,12 @@ MIN_OVERLAP = 0.5
 CACHE = DATA / "search_cache"
 CHIPS = 40                    # image chips returned, AIS-unmatched first
 NOT_AVAILABLE = "AIS_NOT_AVAILABLE"
-CACHE_VERSION = 2             # bump when results change, so stale cached searches are not served
+# YOLO26n operating point (RESULTS.md §7): 0.25 finds 71 % of visible AIS ships vs 55 % at
+# the RT-DETR-era 0.40. Scores 0.15-0.25 are kept as weak candidates, hidden by default and
+# outside the headline counts, until per-band precision from human review (test plan T3)
+# shows whether they hold >= 0.80.
+SHIP_CONF, WEAK_CONF = 0.25, 0.15
+CACHE_VERSION = 3             # bump when results change, so stale cached searches are not served
 
 
 def box_km(box):
@@ -91,6 +96,18 @@ def pick_scene(items, box, tries=4):
             return item, ais, note
     return items[0], pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"]), (
         "AIS for the recent passes over this box is not available yet; ships are shown unchecked.")
+
+
+def counts(ships, sts):
+    """Headline counts from full-strength ships only; weak candidates counted apart."""
+    strong = [s for s in ships if not s.get("weak")]
+    weak = [s for s in ships if s.get("weak")]
+    return {"ships": len(strong),
+            "ais_unmatched": sum(s["category"] == dark_sts.AIS_UNMATCHED for s in strong),
+            "weak_candidates": len(weak),
+            "weak_ais_unmatched": sum(s["category"] == dark_sts.AIS_UNMATCHED for s in weak),
+            "sts_pairs": len(sts),
+            "sts_pairs_with_silent_hull": sum((p["without_ais"] or 0) > 0 for p in sts)}
 
 
 def evidence(ship, sts_note=None, gap=None, cover=None):
@@ -215,9 +232,10 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
     t = scene_time(item)
 
     progress("Detecting ships", 0.4)
-    det = detect(tif, weights, conf=hunt.STS_CONF)
+    det = detect(tif, weights, conf=WEAK_CONF)
     if len(det):
-        det = det[(det.cls == "sts") | (det.conf >= hunt.VESSEL_CONF)].copy()
+        det = det[(det.cls == "sts") | (det.conf >= WEAK_CONF)].copy()
+        det["weak"] = (det.cls == "vessel") & (det.conf < SHIP_CONF)
         det["tif"] = str(tif)
         det = hunt.dedupe(clean_detections(det)) if len(det) else det
 
@@ -249,7 +267,7 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
         progress("Measuring hulls and looking for ships side by side", 0.75)
         res = hunt.hull_shape(res)
         res["wide"] = False           # one box has too few AIS-matched ships to calibrate width
-        sts = hunt.sts_candidates(res)
+        sts = hunt.sts_candidates(res[~res.weak.astype(bool)])   # pairs only from full-strength hulls
         if len(sts):
             # Both sources together: a ship seen by both counts twice here, which can only
             # understate silent hulls, never invent one.
@@ -293,8 +311,8 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
                                                                              "factors": []}
         result["coverage"] = cover
         result["jamming_signs"] = signs or None
-        order = res.assign(_u=(res.category == dark_sts.AIS_UNMATCHED)).sort_values(
-            ["_u", "length_m"], ascending=[False, False])
+        order = res.assign(_u=(res.category == dark_sts.AIS_UNMATCHED), _w=res.weak.astype(bool)).sort_values(
+            ["_w", "_u", "length_m"], ascending=[True, False, False])          # weak candidates last
         for n, (i, r) in enumerate(order.iterrows()):
             unmatched = r.category == dark_sts.AIS_UNMATCHED
             gap = context.nearest_gap(r.lat, r.lon, t, gaps) if unmatched else None
@@ -303,7 +321,8 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
                     "length_m": round(float(r.hull_m if r.hull_m == r.hull_m else r.length_m)),
                     "beam_m": None if r.beam_m != r.beam_m else round(float(r.beam_m)),
                     "conf": round(float(r.conf), 3), "category": r.category,
-                    "n_ais": int(r.n_identities), "gfw_also_unmatched": bool(r.gfw_also_unmatched)}
+                    "n_ais": int(r.n_identities), "gfw_also_unmatched": bool(r.gfw_also_unmatched),
+                    "weak": bool(r.weak)}
             cands = []
             if ais_ok:
                 hull = ship["length_m"] or None
@@ -314,6 +333,10 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
             ship["coverage"] = cover["label"]
             ship["reasons"] = reasons(ship, ais_ok, notes.get(i), gap, zone, source_names,
                                       match.explain(cands), cover)
+            if ship["weak"]:
+                ship["reasons"].insert(0, f"Weak candidate: detector score {ship['conf']:.2f} is below "
+                                          f"{SHIP_CONF:.2f}. Hidden by default; how often scores this low are "
+                                          "real ships has not been measured yet.")
             ship["evidence"] = evidence(ship, notes.get(i), gap, cover)
             ship["evidence_points"] = len(ship["evidence"])
             ship["zone"] = zone
@@ -331,11 +354,8 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
     else:
         result["ais_available"] = None
 
-    cats = pd.Series([s["category"] for s in result["ships"]], dtype=object)
-    result["counts"] = {"ships": len(result["ships"]),
-                        "ais_unmatched": int((cats == dark_sts.AIS_UNMATCHED).sum()),
-                        "sts_pairs": len(result["sts"]),
-                        "sts_pairs_with_silent_hull": sum((s["without_ais"] or 0) > 0 for s in result["sts"])}
+    result["thresholds"] = {"ship": SHIP_CONF, "weak": WEAK_CONF}
+    result["counts"] = counts(result["ships"], result["sts"])
     result["note"] = ("A ship with no AIS match is a candidate for review, not a finding: AIS can be "
                       "missing for innocent reasons (reception gaps, small craft, military vessels).")
     hit.parent.mkdir(parents=True, exist_ok=True)

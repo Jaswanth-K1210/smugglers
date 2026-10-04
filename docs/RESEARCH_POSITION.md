@@ -132,10 +132,28 @@ on both sides and reports a score the model has not earned. Enforced:
    repeat slices of the same overpass.
 3. No tile adjacent to a validation tile enters training.
 4. No AIS from a test region is used in training or labelling.
-5. No GFW-derived product is ever used to train or tune the SAR detector —
-   GFW enters only at the fusion/comparison layer.
+5. GFW classifications never train, tune or select the detector. GFW AIS
+   presence may confirm pseudo-labels, and this is disclosed. Nothing tuned on
+   GFW data is scored against GFW data. (Amended 2026-10-04; see below.)
 6. Test regions stay sealed until detector and fusion hyperparameters are frozen.
 ```
+
+**Amendment to rule 5 (2026-10-04).** The original rule ("no GFW-derived product
+trains or tunes the detector") was broken by the multi-region detector, whose
+Gulf of Oman and Laconia pseudo-labels were confirmed with GFW AIS presence
+(RESULTS.md §6), and would have been broken again by choosing the operating
+threshold from recall against GFW AIS (RESULTS.md §7). What the rule exists to
+stop is GFW's own *classifications* (its SAR detections and their matched flag,
+gap and encounter events, vessel types) training or tuning the detector and GFW
+then being used to score it. GFW AIS *presence* is plain AIS positions, the only
+AIS available outside Denmark, so using it to confirm labels is a disclosed
+exception, not a quiet one.
+
+Condition attached to the amendment: **the final accuracy numbers come from data
+independent of the tuning**: Skagen with Danish Maritime Authority AIS, and the
+Gulf AIS recorder (`src/regional_ais.py`). GFW stays only as the cross-check
+(test plan T7). The §7 recall figures, measured against GFW AIS in the training
+months, are calibration, not final accuracy.
 
 Rule 6 is the one most easily broken by accident. Hormuz, Malacca and Kerch are
 not looked at, not tuned against, and not plotted until the training-region

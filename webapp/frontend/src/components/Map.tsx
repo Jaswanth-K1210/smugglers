@@ -222,6 +222,7 @@ export const MapComponent: React.FC<{
 }> = ({ live, drawing, box, onBox, scanning, result, onBounds, focus, fit, onShip, onPickVessel, picked, track, hidden, onToggleGroup, mapStyle, gfw }) => {
   const events = useDashboardStore((s) => s.getFilteredEvents())
   const selected = useDashboardStore((s) => s.selectedEvent)
+  const showWeak = useDashboardStore((s) => s.showWeak)
   const setSelectedEvent = useDashboardStore((s) => s.setSelectedEvent)
   const valid = events.filter((e) => Number.isFinite(e.lat) && Number.isFinite(e.lon))
 
@@ -282,9 +283,9 @@ export const MapComponent: React.FC<{
             <Tooltip>Side-by-side pair / {s.spacing_m} m apart / {s.radar_hulls} hulls</Tooltip>
           </CircleMarker>
         ))}
-        {result && [...result.ships].reverse().map((s) => (  // unmatched ships come first; draw them last, on top
-          <CircleMarker key={`ship-${s.id}`} center={[s.lat, s.lon]} radius={6}
-            pathOptions={{ color: '#0A0A0A', weight: 1.5, fillColor: SEARCH_COLORS[s.category] ?? '#E8E8E8', fillOpacity: 1 }}
+        {result && [...result.ships].filter((s) => showWeak || !s.weak).reverse().map((s) => (  // unmatched first in the list; draw them last, on top
+          <CircleMarker key={`ship-${s.id}`} center={[s.lat, s.lon]} radius={s.weak ? 4 : 6}
+            pathOptions={{ color: '#0A0A0A', weight: 1.5, fillColor: SEARCH_COLORS[s.category] ?? '#E8E8E8', fillOpacity: s.weak ? 0.45 : 1, dashArray: s.weak ? '2 2' : undefined }}
             eventHandlers={{ click: () => onShip(s.id) }}>
             <Tooltip>Radar ship {s.id + 1} / ≈{s.length_m} m / {s.category.replace(/_/g, ' ').toLowerCase()}</Tooltip>
           </CircleMarker>

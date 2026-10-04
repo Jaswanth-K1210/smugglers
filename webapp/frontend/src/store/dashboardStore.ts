@@ -24,6 +24,8 @@ export interface UserProfile {
 }
 
 interface DashboardStore {
+  showWeak: boolean            // area search: show detector scores 0.15–0.25 (hidden by default)
+  setShowWeak: (show: boolean) => void
   events: STSEvent[]
   selectedEvent: STSEvent | null
   filter: {
@@ -75,6 +77,7 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
     region: 'all'
   },
   searchQuery: '',
+  showWeak: false,
   user: getStoredUser(),
   loading: false,
   error: null,
@@ -87,6 +90,7 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
   })),
 
   setSearchQuery: (searchQuery) => set({ searchQuery }),
+  setShowWeak: (showWeak) => set({ showWeak }),
   login: (user, token) => {
     try {
       localStorage.setItem('sts_user', JSON.stringify(user))

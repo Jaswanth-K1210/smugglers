@@ -1,4 +1,5 @@
 import React from 'react'
+import { useDashboardStore } from '../store/dashboardStore'
 import type { BBox, SearchJob, SearchShip } from '../services/api'
 import { STATUS } from '../status'
 import { Panel } from './Panel'
@@ -93,6 +94,10 @@ export const AreaSearch: React.FC<{
     : null
   const busy = job?.status === 'queued' || job?.status === 'running'
   const result = job?.status === 'done' ? job.result : undefined
+  const showWeak = useDashboardStore((s) => s.showWeak)
+  const setShowWeak = useDashboardStore((s) => s.setShowWeak)
+  const ships = result ? result.ships.filter((s) => showWeak || !s.weak) : []
+  const nWeak = result?.counts.weak_candidates ?? 0
 
   return (
     <Panel title="Area search" right={box && <span className="text-[10px] text-ink-3">{w.toFixed(0)} × {h.toFixed(0)} km</span>} bodyClassName="space-y-3 p-3">
@@ -154,9 +159,18 @@ export const AreaSearch: React.FC<{
             {result.scene.platform ?? 'Sentinel-1'} pass of {new Date(result.scene.time).toUTCString().slice(5, 22)} UTC
             {result.cached ? ', from an earlier search.' : '.'} {result.scene_note}
           </p>
-          {result.ships.length ? (
+          {nWeak > 0 && (
+            <label className="flex items-start gap-2 text-[11px] text-ink-2">
+              <input type="checkbox" checked={showWeak} onChange={(e) => setShowWeak(e.target.checked)} className="mt-0.5" />
+              <span>
+                Show {nWeak} weak candidate{nWeak === 1 ? '' : 's'} (detector score {result.thresholds?.weak ?? 0.15}–{result.thresholds?.ship ?? 0.25})
+                <span className="block text-ink-3">Not in the counts above. How often scores this low are real ships has not been measured yet.</span>
+              </span>
+            </label>
+          )}
+          {ships.length ? (
             <ul className="max-h-72 overflow-y-auto">
-              {result.ships.map((s) => (
+              {ships.map((s) => (
                 <ShipRow key={s.id} ship={s} open={openShip === s.id} onToggle={() => onShip(openShip === s.id ? null : s.id)} />
               ))}
             </ul>

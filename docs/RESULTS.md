@@ -379,14 +379,25 @@ Recall by distance from shore at 0.40: 1-3 km **0.011** (267 ships), 3-10 km 0.5
 1. **In-training region.** The multi-region detector was trained on pseudo-labels from
    these same Oman months (§6), so this is in-region recall and likely optimistic. The
    geographic test (sealed region, research rule 6) is still to do.
-2. **Research rule 5.** `RESEARCH_POSITION.md` says no GFW-derived product trains or
-   tunes the detector. The §6 pseudo-labels were confirmed with GFW AIS presence, and
-   choosing a threshold from this table would tune on GFW AIS too. Either the rule is
-   amended (GFW *presence* is AIS positions, the only AIS outside Denmark; the rule's
-   intent was GFW's derived classifications) or calibration moves to Skagen with DMA
-   AIS. Undecided.
+2. **Research rule 5 (amended).** The §6 pseudo-labels were confirmed with GFW AIS
+   presence, and this table is measured against GFW AIS. Rule 5 now reads: GFW
+   classifications never train, tune or select the detector; GFW AIS presence may
+   confirm pseudo-labels (disclosed); nothing tuned on GFW data is scored against GFW
+   data (`RESEARCH_POSITION.md`). So these figures are **calibration, not final
+   accuracy**; final numbers must come from Skagen (Danish AIS) and the Gulf AIS
+   recorder, with GFW only as the T7 cross-check.
 3. Size, type and incidence angle were not measured: GFW presence carries no length or
    type, and incidence needs the GRD annotation files.
+
+**Decision (2026-10-04): serve 0.25, not 0.15.** This table measures recall only; it
+says nothing about how many of the extra candidates at 0.15 are real ships. The rule is
+to lower the threshold only into score bands where human-reviewed precision stays
+>= 0.80 (test plan T3), which is unmeasured for 0.15. 0.25 adds 16 points of recall
+over 0.40 (55 % -> 71 %) with a modest rise in candidates (11 -> 20 per 1000 km2), and
+matches the STS detection threshold. Scores 0.15-0.25 are returned as **weak
+candidates**: outside the headline counts, hidden on the map and list unless the user
+turns them on, each labelled "how often scores this low are real ships has not been
+measured yet". STS pairs are formed from full-strength hulls only.
 
 Calibration saved to `outputs/calibration_yolo26n_oman.json`; the selection rule is
 tested in `tests/test_detector_calibration.py`.

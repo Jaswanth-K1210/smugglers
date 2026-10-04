@@ -139,6 +139,7 @@ export interface SearchShip {
   chip_png: string | null
   ais_candidates?: AisCandidate[]
   coverage?: string
+  weak?: boolean            // detector score below the ship threshold (0.25); hidden by default
 }
 
 export interface SearchResult {
@@ -148,7 +149,9 @@ export interface SearchResult {
   cached: boolean
   ships: SearchShip[]
   sts: { lat: number; lon: number; tier: string; spacing_m: number; radar_hulls: number; ais_identities: number | null; without_ais: number | null }[]
-  counts: { ships: number; ais_unmatched: number; sts_pairs: number; sts_pairs_with_silent_hull: number }
+  counts: { ships: number; ais_unmatched: number; sts_pairs: number; sts_pairs_with_silent_hull: number;
+            weak_candidates?: number; weak_ais_unmatched?: number }
+  thresholds?: { ship: number; weak: number }
   coverage?: Coverage
   ais_source?: string
   note: string

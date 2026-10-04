@@ -1,7 +1,8 @@
 """Backend on Modal (serverless CPU, $30/month free credits).
 
     pip install modal && modal setup          # once: browser login
-    modal deploy modal_app.py                 # prints the API URL
+    (cd webapp/frontend && npm run build)     # the website, served from the same URL
+    modal deploy modal_app.py                 # prints the URL
 
 Same FastAPI app as the Docker image (webapp/backend/app.py). Secrets are read
 from the local .env at deploy time and sent to Modal, never committed. User
@@ -22,7 +23,10 @@ if modal.is_local():                          # deploy time only: read .env, kee
     from src.config import GFW_API_TOKEN
     if not GFW_API_TOKEN:
         raise SystemExit("GFW_API_TOKEN is empty in .env; the backend needs it for AIS.")
-    values = {"GFW_API_TOKEN": GFW_API_TOKEN,
+    import os
+    if os.getenv("AISSTREAM_API_KEY"):        # live ship dots on the map; optional
+        values["AISSTREAM_API_KEY"] = os.environ["AISSTREAM_API_KEY"]
+    values |= {"GFW_API_TOKEN": GFW_API_TOKEN,
               # stable across deploys, so sign-ins survive; derived, not stored
               "AUTH_SECRET": hashlib.sha256(f"darksts-auth:{GFW_API_TOKEN}".encode()).hexdigest()}
 
@@ -34,10 +38,13 @@ image = (modal.Image.debian_slim(python_version="3.11")
                "EVENTS_PATH": "/app/outputs/events.geojson",
                "USERS_DB": "/app/data/users.db",
                "HF_HOME": "/app/data/hf",
-               "YOLO_CONFIG_DIR": "/app/data/ultralytics"})
+               "YOLO_CONFIG_DIR": "/app/data/ultralytics",
+               "GFW_RETRY_WAIT": "5"})
          .add_local_dir("src", "/app/src", ignore=["__pycache__"])
          .add_local_dir("webapp/backend", "/app/webapp/backend", ignore=["__pycache__"])
-         .add_local_file("outputs/events.geojson", "/app/outputs/events.geojson"))
+         .add_local_file("outputs/events.geojson", "/app/outputs/events.geojson")
+         # built website (cd webapp/frontend && npm run build), served by the same app: one URL
+         .add_local_dir("webapp/frontend/dist", "/app/webapp/frontend/dist"))
 
 app = modal.App("darksts")
 data = modal.Volume.from_name("darksts-data", create_if_missing=True)

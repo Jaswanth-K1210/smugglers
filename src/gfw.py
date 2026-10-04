@@ -9,6 +9,7 @@ Everything here is an independent reference layer we compare our own detections
 against. `matched=false` in a GFW layer is evidence, not a verdict.
 """
 import json
+import os
 import sys
 import time
 
@@ -28,8 +29,12 @@ PRESENCE = "public-global-presence:latest"      # AIS, all vessel types
 SAR = "public-global-sar-presence:latest"       # GFW's own Sentinel-1 detections
 
 
-def _post(url, tries=5, wait=30, **kw):
+RETRY_WAIT = float(os.getenv("GFW_RETRY_WAIT", "30"))   # the website sets ~5: a person is waiting
+
+
+def _post(url, tries=5, wait=None, **kw):
     """POST with backoff on 429 (rate limit) and 5xx (GFW gateway hiccups)."""
+    wait = RETRY_WAIT if wait is None else wait
     for i in range(tries):
         r = requests.post(url, headers=_headers(), **kw)
         if r.status_code != 429 and r.status_code < 500:

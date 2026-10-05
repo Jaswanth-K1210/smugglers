@@ -1,0 +1,32 @@
+{
+ "frozen_utc": "2026-10-05T20:16:22+00:00",
+ "decision": "YOLO26n is the served detector until revisited (candidates later: YOLO26s/m, xView3-SAR training data). Changing the model, weights or any value below makes a new version: T4-T8 must be rerun.",
+ "commit": "f3f32ab4580ed6000b5d908e60c3ba9cc2651245",
+ "model": {
+  "name": "yolo26n",
+  "training_run": "multi_yolo26n (Colab, RESULTS.md \u00a76b)",
+  "served_from": "Modal volume darksts-models:/best.pt (fallback: HF Jaswanth-K/darksts-detector)",
+  "sha256": "1c5ebf5e93dc023df45604afd03c520f3962592e54fcc52e839d7dec7c20ef71",
+  "bytes": 5476421
+ },
+ "backup_model": {
+  "name": "rtdetr-l",
+  "sha256": "4a9818c936eeab38d29c290e8602d11858777166f9f5cd28a3be1eaa33ab0216"
+ },
+ "thresholds": {
+  "SHIP_CONF": 0.25,
+  "WEAK_CONF": 0.15,
+  "STS_CONF": 0.25
+ },
+ "pipeline": {
+  "MIN_VALID": 0.2,
+  "EDGE_PX": 20,
+  "MIN_OVERLAP": 0.5,
+  "CACHE_VERSION": 3
+ },
+ "deployments": {
+  "all_in_one_site": "https://jaswanth-k1210--darksts-web.modal.run",
+  "search_worker": "Modal app darksts-worker"
+ },
+ "python": "3.13.3"
+}

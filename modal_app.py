@@ -42,7 +42,8 @@ image = (modal.Image.debian_slim(python_version="3.11")
                "GFW_RETRY_WAIT": "5",
                # the scheduled job below owns the Gulf AIS recording; the web container only reads it
                "REGIONAL_RECORD": "0",
-               "REGIONAL_AIS_DIR": "/app/ais"})
+               "REGIONAL_AIS_DIR": "/app/ais",
+               "WEIGHTS_PATH": "/models/best.pt"})
          .add_local_dir("src", "/app/src", ignore=["__pycache__"])
          .add_local_dir("webapp/backend", "/app/webapp/backend", ignore=["__pycache__"])
          .add_local_file("outputs/events.geojson", "/app/outputs/events.geojson")
@@ -55,9 +56,11 @@ data = modal.Volume.from_name("darksts-data", create_if_missing=True)
 # recorder's new rows, and a reload makes every file on that volume briefly
 # unopenable, which on the shared volume broke the user database mid-search.
 ais = modal.Volume.from_name("darksts-ais", create_if_missing=True)
+# Trained weights uploaded straight from Colab (scripts/upload_model.py); Hugging Face is the fallback.
+models = modal.Volume.from_name("darksts-models", create_if_missing=True)
 
 
-@app.function(image=image, cpu=2, memory=4096, timeout=900, volumes={"/app/data": data, "/app/ais": ais},
+@app.function(image=image, cpu=2, memory=4096, timeout=900, volumes={"/app/data": data, "/app/ais": ais, "/models": models},
               secrets=[modal.Secret.from_dict(values)], max_containers=1, scaledown_window=600)
 @modal.concurrent(max_inputs=50)
 @modal.asgi_app()

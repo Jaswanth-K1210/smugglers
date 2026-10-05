@@ -23,6 +23,7 @@ image = base_image.add_local_file("modal_app.py", "/root/modal_app.py")
 app = modal.App("darksts-worker")
 cache = modal.Volume.from_name("darksts-worker-cache", create_if_missing=True)
 progress = modal.Dict.from_name("darksts-progress", create_if_missing=True)
+models = modal.Volume.from_name("darksts-models", create_if_missing=True)   # scripts/upload_model.py
 
 MODEL_REPO = "Jaswanth-K/darksts-detector"    # best.pt = YOLO26n trained in Colab
 PARALLEL = 3                                    # GFW and Planetary Computer rate-limit wider fan-out
@@ -45,19 +46,27 @@ def _put(job_id, key, **kw):
 
 
 @app.function(image=image, cpu=2, memory=4096, timeout=900, secrets=[modal.Secret.from_dict(values)],
-              volumes={"/cache": cache, "/app/ais": ais}, max_containers=PARALLEL, scaledown_window=300)
+              volumes={"/cache": cache, "/app/ais": ais, "/models": models}, max_containers=PARALLEL,
+              scaledown_window=300)
 def search_pass(item, box, job_id, index):
     """One Sentinel-1 pass of a period search; errors come back as a value, not an exception."""
     _setup()
-    from huggingface_hub import hf_hub_download
+    from pathlib import Path
     from src import search
-    weights = hf_hub_download(MODEL_REPO, "best.pt", cache_dir="/cache/hf")
+    weights = Path("/models/best.pt")             # uploaded straight from Colab (scripts/upload_model.py)
+    if not weights.exists():                      # fallback: the Hugging Face model repo
+        from huggingface_hub import hf_hub_download
+        weights = hf_hub_download(MODEL_REPO, "best.pt", cache_dir="/cache/hf")
     t = item["properties"]["datetime"][:16].replace("T", " ")
     _put(job_id, index, stage=f"{t} UTC: starting", progress=0.0, scene=item["id"])
     try:
         out = search.run_pass(item, box, weights, cache="/cache/search",
                               progress=lambda stage, frac: _put(job_id, index, stage=f"{t} UTC: {stage}",
                                                                 progress=frac, scene=item["id"]))
+        import hashlib
+        out["model"] = {"source": "modal volume darksts-models" if str(weights).startswith("/models/")
+                        else f"huggingface {MODEL_REPO}",
+                        "sha256": hashlib.sha256(open(weights, "rb").read()).hexdigest()[:16]}
         if not out.get("ais_available"):
             out["scene_note"] = ("No AIS could be fetched for this pass (Global Fishing Watch had no data for it "
                                  "yet, publishing runs a few days behind, or was busy), so its ships are shown "

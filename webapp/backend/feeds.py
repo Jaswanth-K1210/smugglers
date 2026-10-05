@@ -709,7 +709,7 @@ def news(region: str = "all"):
 # that refreshes every 15 s. A user asks for it per view ("Fill this view"); ships stay on
 # the map for VESSELAPI_KEEP_S, and a reserve of requests is never spent.
 VESSELAPI_URL = "https://api.vesselapi.com/v1/location/vessels/bounding-box"
-VESSELAPI_PAGES = 2            # 50 ships each: up to 100 ships per fill
+VESSELAPI_PAGES = 2            # 50 reports each (a ship can appear several times): ~50-100 ships per fill
 VESSELAPI_MAX_DEG = 2.0        # larger views would scatter 100 ships too thinly to be useful
 VESSELAPI_RESERVE = 10         # requests kept back so the month never runs dry
 VESSELAPI_KEEP_S = 30 * 60
@@ -735,7 +735,7 @@ def vesselapi_fill(box, now=None):
         raise ValueError("This month's VesselAPI requests are used up (a small reserve is kept).")
     params = {"filter.lonLeft": w, "filter.lonRight": e, "filter.latBottom": s, "filter.latTop": n,
               "pagination.limit": 50}
-    added = 0
+    seen = set()
     for _ in range(VESSELAPI_PAGES):
         r = requests.get(VESSELAPI_URL, headers={"Authorization": f"Bearer {key}", **UA}, params=params, timeout=30)
         if r.headers.get("X-Ratelimit-Remaining", "").isdigit():
@@ -744,20 +744,23 @@ def vesselapi_fill(box, now=None):
             vesselapi_state["error"] = f"VesselAPI answered {r.status_code}"
             raise ValueError("VesselAPI did not answer; try again later.")
         d = r.json()
-        for v in d.get("vessels") or []:
+        for v in d.get("vessels") or []:                  # several recent reports per ship: keep the newest
             if v.get("suspected_glitch") or v.get("latitude") is None:
                 continue
-            vesselapi_rows[str(v["mmsi"])] = {
-                "mmsi": str(v["mmsi"]), "name": (v.get("vessel_name") or "").strip() or None,
+            key, reported = str(v["mmsi"]), pd_ts(v["timestamp"]) if v.get("timestamp") else now
+            old = vesselapi_rows.get(key)
+            if old and old["fetched"] == now and old["reported"] >= reported:
+                continue
+            vesselapi_rows[key] = {
+                "mmsi": key, "name": (v.get("vessel_name") or "").strip() or None,
                 "lat": float(v["latitude"]), "lon": float(v["longitude"]), "sog": v.get("sog"), "cog": v.get("cog"),
-                "heading": v.get("heading"), "reported": pd_ts(v["timestamp"]) if v.get("timestamp") else now,
-                "fetched": now}
-            added += 1
+                "heading": v.get("heading"), "reported": reported, "fetched": now}
+            seen.add(key)
         if not d.get("nextToken") or (vesselapi_state["remaining"] or 0) <= VESSELAPI_RESERVE:
             break
         params["pagination.nextToken"] = d["nextToken"]
     vesselapi_state.update(error=None, last_fill=now)
-    return {"added": added, "remaining": vesselapi_state["remaining"]}
+    return {"added": len(seen), "remaining": vesselapi_state["remaining"]}     # distinct ships
 
 
 def vesselapi_in(w, s, e, n, now, exclude=()):

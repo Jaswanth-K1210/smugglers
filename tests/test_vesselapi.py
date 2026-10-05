@@ -17,9 +17,9 @@ class Resp:
         return self._d
 
 
-def _v(mmsi, lat=19.0, lon=72.8, glitch=False):
+def _v(mmsi, lat=19.0, lon=72.8, glitch=False, ts="2026-10-06T10:00:00Z"):
     return {"mmsi": mmsi, "vessel_name": f"SHIP {mmsi}", "latitude": lat, "longitude": lon, "sog": 0.1, "cog": 10,
-            "heading": 12, "timestamp": "2026-10-06T10:00:00Z", "suspected_glitch": glitch}
+            "heading": 12, "timestamp": ts, "suspected_glitch": glitch}
 
 
 @pytest.fixture(autouse=True)
@@ -71,3 +71,11 @@ def test_endpoint_limits_each_user(monkeypatch, tmp_path):
              for _ in range(backend.VESSELAPI_PER_USER_DAY + 1)]
     assert codes[:-1] == [200] * backend.VESSELAPI_PER_USER_DAY and codes[-1] == 429
     assert TestClient(backend.app).post("/api/live/vesselapi", json={"bbox": MUMBAI}).status_code == 401
+
+
+def test_repeated_reports_keep_the_newest_and_count_ships(monkeypatch):
+    rows = [_v(9, lat=19.00, ts="2026-10-06T10:00:00Z"), _v(9, lat=19.05, ts="2026-10-06T10:10:00Z"),
+            _v(9, lat=19.02, ts="2026-10-06T10:05:00Z"), _v(10)]
+    monkeypatch.setattr(feeds.requests, "get", lambda *a, **k: Resp(rows))
+    out = feeds.vesselapi_fill(MUMBAI, now=2_000_000_000)
+    assert out["added"] == 2 and feeds.vesselapi_rows["9"]["lat"] == 19.05

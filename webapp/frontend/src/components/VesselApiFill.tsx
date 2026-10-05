@@ -26,7 +26,7 @@ export const VesselApiFill: React.FC<{ bounds: BBox | null; feed: LiveFeed | nul
   return (
     <Panel title="Fill this view" bodyClassName="space-y-2 p-3">
       <p className="text-[11px] leading-relaxed text-ink-2">
-        Few free AIS receivers cover some coasts (India, for example). Load up to 100 ships for this view from VesselAPI.
+        Few free AIS receivers cover some coasts (India, for example). Load the ships in this view from VesselAPI (about 30-100, positions minutes old).
         {va.remaining != null && <> {va.remaining} requests left this month.</>}
       </p>
       <button onClick={fill} disabled={busy || !bounds || tooBig} className="btn-quiet w-full">

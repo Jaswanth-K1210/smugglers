@@ -72,13 +72,19 @@ def main():
     if j["status"] != "done":
         return
     res = j["result"]
-    ships = res["ships"]
+    # single pass (all-in-one site) or a period of passes (Render + Modal worker)
+    passes = [p for p in res.get("passes", [res]) if "error" not in p]
+    if "passes" in res:
+        check("period search: passes searched", res["passes_searched"] > 0 and res["passes_failed"] == 0,
+              f"{res['passes_searched']} of {res['passes_found']} found, {res['passes_failed']} failed")
+    ships = [s for p in passes for s in p["ships"]]
     check("model found ships", len(ships) > 0, f"{res['counts']}")
     check("every ship has reasons", all(s["reasons"] for s in ships))
     text = " ".join(" ".join(s["reasons"]) for s in ships).lower()
     check("no 'dark' wording", "dark" not in text)
     check("radar chips attached", any(s.get("chip_png") for s in ships))
-    print(f"        scene {res['scene']['time']}  {res.get('scene_note') or ''}")
+    for p in passes:
+        print(f"        scene {p['scene']['time']}  {p.get('scene_note') or ''}")
 
 
 if __name__ == "__main__":

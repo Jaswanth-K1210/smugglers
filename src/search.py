@@ -41,6 +41,11 @@ SHIP_CONF, WEAK_CONF = 0.25, 0.15
 CACHE_VERSION = 3             # bump when results change, so stale cached searches are not served
 
 
+MAX_PERIOD_DAYS, MAX_PASSES = 31, 6     # time-period search limits (docs/DEPLOYMENT_PLAN.md §2)
+ARCHIVE_START = pd.Timestamp("2014-10-03")   # first Sentinel-1 IW data on Planetary Computer
+RECUR_M = 300                 # same spot on two passes: likely a fixed structure or a ship at anchor
+
+
 def box_km(box):
     lon0, lat0, lon1, lat1 = box
     return ((lon1 - lon0) * 111.32 * math.cos(math.radians((lat0 + lat1) / 2)), (lat1 - lat0) * 110.57)
@@ -209,10 +214,10 @@ def _at_pass(reg, t):
 
 
 def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
-    """Search one box; returns a JSON-ready dict. Raises ValueError / LookupError for user errors."""
-    from src.filters import clean_detections
-    from src.run_pipeline import detect
+    """Search one box on its newest checkable pass; returns a JSON-ready dict.
 
+    Raises ValueError / LookupError for user errors.
+    """
     box = validate(box)
     progress("Finding the newest Sentinel-1 pass over your box", 0.05)
     items = scenes(box, end)
@@ -221,6 +226,27 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
                           f"{LOOKBACK_DAYS} days. Try a box further from the coast or a bit larger.")
     progress("Checking which pass already has AIS data", 0.1)
     item, ais, scene_note = pick_scene(items, box)
+    return run_pass(item, box, weights, ais, scene_note, progress, cache)
+
+
+def ais_for_pass(item, box):
+    """GFW AIS presence within ±2 h of the pass; empty (never an error) when GFW has none or fails."""
+    t = scene_time(item)
+    try:
+        return gfw.ais_presence(t - pd.Timedelta(hours=2), t + pd.Timedelta(hours=2), box)
+    except Exception:
+        return pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"])
+
+
+def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stage, frac: None, cache=CACHE):
+    """Everything after the pass is chosen: download, detect, AIS, hulls, pairs, reasons."""
+    from src.filters import clean_detections
+    from src.run_pipeline import detect
+
+    box = validate(box)
+    if ais is None:
+        progress("Getting AIS for this pass", 0.1)
+        ais = ais_for_pass(item, box)
     key = f"v{CACHE_VERSION}_{item['id']}_{'_'.join(f'{v:.3f}' for v in box)}"
     hit = Path(cache) / f"{key}.json"
     if hit.exists():
@@ -362,3 +388,70 @@ def run(box, weights, progress=lambda stage, frac: None, end=None, cache=CACHE):
     hit.write_text(json.dumps(result))
     progress("Done", 1.0)
     return result
+
+
+def validate_period(start, end, today=None):
+    """(start, end) as Timestamps; ValueError with a sentence a user can act on."""
+    try:
+        a, b = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
+    except (ValueError, TypeError):
+        raise ValueError("Send the dates as YYYY-MM-DD.")
+    today = pd.Timestamp(today or pd.Timestamp.utcnow().tz_localize(None)).normalize()
+    if b < a:
+        raise ValueError("The end date is before the start date.")
+    if b > today:
+        raise ValueError("The end date is in the future.")
+    if a < ARCHIVE_START:
+        raise ValueError(f"Sentinel-1 images start on {ARCHIVE_START:%d %b %Y}; pick a later start date.")
+    if (b - a).days + 1 > MAX_PERIOD_DAYS:
+        raise ValueError(f"Pick a period of at most {MAX_PERIOD_DAYS} days (this one is {(b - a).days + 1}).")
+    return a, b
+
+
+def period_passes(box, start, end, max_passes=MAX_PASSES):
+    """(passes to search, passes found): real-footprint coverage >= 50 %, newest first."""
+    box = validate(box)
+    a, b = validate_period(start, end)
+    items = fetch_s1.search(f"{a:%Y-%m-%d}", f"{b:%Y-%m-%d}", box=box, limit=200)
+    items = [i for i in items if fetch_s1.overlap(i, box) >= MIN_OVERLAP]
+    if not items:
+        raise LookupError("No Sentinel-1 pass covered at least half of this box in that period. "
+                          "Try a longer period, a larger box or one further from the coast.")
+    return items[:max_passes], len(items)
+
+
+def combine(passes, found=None, radius_m=RECUR_M):
+    """One period result from per-pass results; AIS-unmatched spots seen on 2+ passes are flagged.
+
+    A position that is AIS-unmatched on several passes is more likely a fixed structure or a
+    ship at anchor than a transfer, so it is flagged "recurring" for the reviewer, not removed.
+    """
+    ok = [p for p in passes if "error" not in p]
+    spots = [(k, s) for k, p in enumerate(ok) for s in p["ships"]
+             if s["category"] == dark_sts.AIS_UNMATCHED and not s.get("weak")]
+    recurring, seen = [], set()
+    for i, (k, s) in enumerate(spots):
+        if i in seen:
+            continue
+        group = [i] + [j for j, (k2, s2) in enumerate(spots) if j > i and j not in seen and k2 != k and
+                       float(dark_sts._metres_between(s["lat"], s["lon"], s2["lat"], s2["lon"])) <= radius_m]
+        passes_hit = {spots[j][0] for j in group}
+        if len(passes_hit) > 1:
+            seen.update(group)
+            for j in group:
+                spots[j][1]["recurring_passes"] = len(passes_hit)
+            recurring.append({"lat": s["lat"], "lon": s["lon"], "passes": len(passes_hit), "_n": len(group),
+                              "times": sorted(ok[k2]["scene"]["time"] for k2 in passes_hit)})
+    unique = len(spots) - sum(r["_n"] - 1 for r in recurring)
+    for r in recurring:
+        r.pop("_n")
+    return {"passes": sorted(passes, key=lambda p: p.get("scene", {}).get("time", ""), reverse=True),
+            "passes_found": found if found is not None else len(passes),
+            "passes_searched": len(passes), "passes_failed": len(passes) - len(ok),
+            "recurring": recurring,
+            "counts": {"ships": sum(p["counts"]["ships"] for p in ok),
+                       "ais_unmatched": sum(p["counts"]["ais_unmatched"] for p in ok),
+                       "ais_unmatched_spots": unique,   # a recurring group is one place
+                       "weak_candidates": sum(p["counts"].get("weak_candidates", 0) for p in ok),
+                       "sts_pairs": sum(p["counts"]["sts_pairs"] for p in ok)},
+            "note": ok[0]["note"] if ok else None}

@@ -59,7 +59,7 @@ split:
   Render stores it and asks Modal for status. A Render restart no longer loses searches,
   and the "one container only" limit of the current design goes away.
 - **Searches can run in parallel.** Each pass in a time period runs in its own Modal
-  container, so 4 passes take about as long as 1.
+  container, 3 at a time (outside services rate-limit wider fan-out).
 
 ---
 
@@ -72,8 +72,8 @@ Today the search uses the newest pass over the box that already has AIS. With a 
    covers >= 50 % of the box (the existing `search.scenes` rule).
 3. Limits: range <= **31 days**, at most **6 passes** (newest first). Sentinel-1 C + D
    pass over a point roughly every 2-6 days, so a month is usually 5-12 passes.
-4. Each pass runs `search_pass` in parallel: download, detect, AIS, hulls, pairs,
-   reasons (the existing `src/search.py` logic, one pass at a time).
+4. Each pass runs `search_pass`, 3 in parallel: download, detect, AIS, hulls, pairs,
+   reasons (`search.run_pass`, the same logic as the single-pass search).
 5. The page shows a **timeline**: one dot per pass, with ship and no-AIS counts; clicking
    a pass shows its ships on the map. A ship seen without AIS on several passes at the
    same spot is flagged as "recurring" (likely a fixed structure or a ship at anchor).
@@ -131,9 +131,14 @@ token, can call them. Users never talk to Modal directly.
 | Render wakes from sleep (free tier sleeps after 15 min idle) | ~30-60 s, first request only |
 | Modal container cold start (image + model download) | ~20-40 s, first search after idle |
 | One pass: find + download + detect + AIS + reasons | ~60-120 s (measured 52-99 s live) |
-| A period of up to 6 passes, in parallel | about the same as one pass, plus ~10-20 s |
+| A period of 6 passes, 3 at a time (measured 2026-10-05) | **~5.5 min** (324 s for 15-30 Sep, Fujairah) |
 
-So: **1-2 minutes per search when warm, up to ~3 minutes after everything has slept.**
+So: **1-2 minutes for a single pass, ~3 minutes for up to 3 passes, ~5-6 minutes for 6**,
+plus up to ~1.5 minutes when Render and Modal are both asleep. Running all 6 at once
+would bring a period back to ~2 minutes, but GFW and Planetary Computer rate-limit
+wide fan-out (both seen in this project), so 3 at a time is the safe default
+(`PARALLEL` in `modal_worker.py`). The page shows each pass as it finishes, so the
+user sees results from the first wave after ~2 minutes.
 Open the site a minute before a demo. An optional Modal GPU (T4) cuts the detection part
 from ~10-30 s to ~2-5 s, but downloading the image dominates, so it is not needed.
 
@@ -174,7 +179,7 @@ Each step ends with tests green and, from step 3, `check_live.py` passing.
 
 | # | Step | Code | Effort |
 | - | ---- | ---- | ------ |
-| 1 | **Modal worker app** `modal_worker.py`: `search_pass`, `search_period`, progress Dict; reuse `src/search.py` split into per-pass and per-period parts | new file + refactor of `src/search.py` | half a day |
+| 1 | **Modal worker app** `modal_worker.py`: `search_pass`, `search_period`, progress Dict; reuse `src/search.py` split into per-pass and per-period parts | **done 2026-10-05**: deployed as `darksts-worker`, 6-pass period searched in 324 s | half a day |
 | 2 | **Backend for Render**: `webapp/backend/app.py` spawns Modal jobs instead of the in-memory executor; Postgres for users (`DATABASE_URL`); CORS for the Vercel domain; slim `requirements-render.txt` (no torch) | edit | half a day |
 | 3 | **Deploy Render**: web service from the GitHub repo, start command `uvicorn webapp.backend.app:app --host 0.0.0.0 --port $PORT`, env vars from §8 | config | 1 hour |
 | 4 | **Frontend**: API base URL from `VITE_API_URL`; date-range picker next to "draw area"; timeline of passes; longer timeout for the first request (cold starts) | edit | half a day |

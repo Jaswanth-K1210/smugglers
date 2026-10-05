@@ -448,7 +448,8 @@ def live_vessels(bbox=None, now=None):
             "group": _group(v["mmsi_int"]), "len": (statics.get(v["mmsi_int"]) or {}).get("length_m")}
            for v in inside]
     reg = regional_in(w, s_, e, n, now)
-    return out + reg, total + len(reg)
+    va = vesselapi_in(w, s_, e, n, now, exclude={str(v["mmsi"]) for v in out})
+    return out + reg + va, total + len(reg) + len(va)
 
 
 def _thin(ships_in, box, cap):
@@ -701,3 +702,74 @@ def news(region: str = "all"):
         return {"region": region, "items": [], "error": f"News is unavailable right now ({type(e).__name__})."}
     _news_cache[region] = {"at": time.time(), "data": data}
     return data
+
+
+# ── VesselAPI: on-demand fill for views the free live feeds do not cover (e.g. India) ──
+# The free plan is 150 requests a month and 50 ships per request, so it cannot drive a map
+# that refreshes every 15 s. A user asks for it per view ("Fill this view"); ships stay on
+# the map for VESSELAPI_KEEP_S, and a reserve of requests is never spent.
+VESSELAPI_URL = "https://api.vesselapi.com/v1/location/vessels/bounding-box"
+VESSELAPI_PAGES = 2            # 50 ships each: up to 100 ships per fill
+VESSELAPI_MAX_DEG = 2.0        # larger views would scatter 100 ships too thinly to be useful
+VESSELAPI_RESERVE = 10         # requests kept back so the month never runs dry
+VESSELAPI_KEEP_S = 30 * 60
+vesselapi_rows: dict = {}      # mmsi -> row, with "fetched"
+vesselapi_state = {"remaining": None, "error": None, "last_fill": None}
+
+
+def vesselapi_configured():
+    return bool(os.getenv("VESSELAPI_KEY"))
+
+
+def vesselapi_fill(box, now=None):
+    """Fetch up to VESSELAPI_PAGES pages of positions inside box. Raises ValueError with a sentence."""
+    now = now or time.time()
+    key = os.getenv("VESSELAPI_KEY")
+    if not key:
+        raise ValueError("VesselAPI is not configured on this server.")
+    w, s, e, n = box
+    if e - w > VESSELAPI_MAX_DEG or n - s > VESSELAPI_MAX_DEG:
+        raise ValueError(f"Zoom in to at most {VESSELAPI_MAX_DEG:g}° × {VESSELAPI_MAX_DEG:g}° to fill the view.")
+    rem = vesselapi_state["remaining"]
+    if rem is not None and rem <= VESSELAPI_RESERVE:
+        raise ValueError("This month's VesselAPI requests are used up (a small reserve is kept).")
+    params = {"filter.lonLeft": w, "filter.lonRight": e, "filter.latBottom": s, "filter.latTop": n,
+              "pagination.limit": 50}
+    added = 0
+    for _ in range(VESSELAPI_PAGES):
+        r = requests.get(VESSELAPI_URL, headers={"Authorization": f"Bearer {key}", **UA}, params=params, timeout=30)
+        if r.headers.get("X-Ratelimit-Remaining", "").isdigit():
+            vesselapi_state["remaining"] = int(r.headers["X-Ratelimit-Remaining"])
+        if r.status_code != 200:
+            vesselapi_state["error"] = f"VesselAPI answered {r.status_code}"
+            raise ValueError("VesselAPI did not answer; try again later.")
+        d = r.json()
+        for v in d.get("vessels") or []:
+            if v.get("suspected_glitch") or v.get("latitude") is None:
+                continue
+            vesselapi_rows[str(v["mmsi"])] = {
+                "mmsi": str(v["mmsi"]), "name": (v.get("vessel_name") or "").strip() or None,
+                "lat": float(v["latitude"]), "lon": float(v["longitude"]), "sog": v.get("sog"), "cog": v.get("cog"),
+                "heading": v.get("heading"), "reported": pd_ts(v["timestamp"]) if v.get("timestamp") else now,
+                "fetched": now}
+            added += 1
+        if not d.get("nextToken") or (vesselapi_state["remaining"] or 0) <= VESSELAPI_RESERVE:
+            break
+        params["pagination.nextToken"] = d["nextToken"]
+    vesselapi_state.update(error=None, last_fill=now)
+    return {"added": added, "remaining": vesselapi_state["remaining"]}
+
+
+def vesselapi_in(w, s, e, n, now, exclude=()):
+    """VesselAPI ships inside the view, shaped like live_vessels rows; a free feed's copy wins."""
+    out = []
+    for k in [k for k, r in vesselapi_rows.items() if now - r["fetched"] > VESSELAPI_KEEP_S]:
+        del vesselapi_rows[k]
+    for r in vesselapi_rows.values():
+        if r["mmsi"] in exclude or not (w <= r["lon"] <= e and s <= r["lat"] <= n):
+            continue
+        mmsi = int(r["mmsi"]) if r["mmsi"].isdigit() else None
+        out.append({"mmsi": r["mmsi"], "name": r["name"], "lat": r["lat"], "lon": r["lon"], "sog": r["sog"],
+                    "cog": r["cog"], "heading": r["heading"], "age_s": int(now - r["reported"]),
+                    "group": _group(mmsi) if mmsi else "unknown", "len": None, "source": "VesselAPI"})
+    return out

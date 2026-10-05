@@ -4,6 +4,7 @@ import { apiService, BBox, GfwLayers, isFailedPass, LiveFeed, passesOf, SearchJo
 import MapComponent, { MapStyle, SHIP_GROUPS } from './Map'
 import { AreaSearch, defaultPeriod } from './AreaSearch'
 import { SearchBox } from './SearchBox'
+import { VesselApiFill } from './VesselApiFill'
 import { News } from './News'
 import { Menu } from './Menu'
 import { VesselCard } from './VesselCard'
@@ -247,6 +248,7 @@ export const Dashboard: React.FC = () => {
         )}
 
         <aside className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:right-3 md:top-3 md:w-[330px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
+          <VesselApiFill bounds={bounds} feed={feed} onFilled={() => bounds && apiService.getLive(bounds).then(setFeed).catch(() => {})} />
           <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />
           <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
             job={job} stages={stages} openShip={openShip} onShip={setOpenShip}

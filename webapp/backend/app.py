@@ -500,6 +500,8 @@ def live(bbox: str = None, _user: dict = Depends(current_user)):
     vessels, total = feeds.live_vessels(box)
     return {"source": "aisstream.io", "regional": feeds.regional_state, "openwaters": feeds.openwaters_state,
             **{k: feeds.state.get(k) for k in ("configured", "connected", "error", "messages", "reconnects")},
+            "vesselapi": {"configured": feeds.vesselapi_configured(), "remaining": feeds.vesselapi_state["remaining"],
+                          "max_deg": feeds.VESSELAPI_MAX_DEG},
             "in_view": total, "vessels": vessels}
 
 
@@ -507,6 +509,31 @@ def live(bbox: str = None, _user: dict = Depends(current_user)):
 def live_search(q: str, _user: dict = Depends(current_user)):
     """Find a ship anywhere by name or MMSI, not only in the current view."""
     return {"ships": feeds.search_ships(q)}
+
+
+_va_clicks = {}                                     # user -> recent fill times
+VESSELAPI_PER_USER_DAY = 5
+
+
+@app.post("/api/live/vesselapi")
+def live_vesselapi(payload: dict, user: dict = Depends(current_user)):
+    """Fill the current view with VesselAPI positions (free plan: 150 requests a month)."""
+    try:
+        box = [float(v) for v in payload.get("bbox") or []]
+        assert len(box) == 4 and box[0] < box[2] and box[1] < box[3]
+    except (ValueError, TypeError, AssertionError):
+        raise HTTPException(422, "Send bbox as [west, south, east, north].")
+    now = time.time()
+    recent = [t for t in _va_clicks.get(user["email"], []) if now - t < 86400]
+    if len(recent) >= VESSELAPI_PER_USER_DAY:
+        raise HTTPException(429, f"You can fill a view {VESSELAPI_PER_USER_DAY} times a day; the shared monthly "
+                                 "VesselAPI quota is small.")
+    try:
+        out = feeds.vesselapi_fill(box, now)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    _va_clicks[user["email"]] = recent + [now]
+    return out
 
 
 @app.get("/api/live/{mmsi}")

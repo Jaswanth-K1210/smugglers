@@ -99,6 +99,8 @@ export interface LiveFeed {
   error: string | null
   in_view: number
   vessels: LiveVessel[]
+  /** On-demand fill for views the free feeds do not cover (free plan: 150 requests a month). */
+  vesselapi?: { configured: boolean; remaining: number | null; max_deg: number }
 }
 
 export interface NewsItem {
@@ -343,6 +345,10 @@ export const apiService = {
 
   async searchShips(q: string): Promise<{ mmsi: string; name: string | null; lat: number; lon: number; source: string }[]> {
     return (await api.get('/live/search', { params: { q } })).data.ships
+  },
+
+  async fillFromVesselApi(bbox: BBox): Promise<{ added: number; remaining: number | null }> {
+    return (await api.post('/live/vesselapi', { bbox }, { timeout: 60000 })).data
   },
 
   async getVessel(mmsi: string): Promise<VesselDetail> {

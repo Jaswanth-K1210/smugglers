@@ -26,7 +26,8 @@ if modal.is_local():                          # deploy time only: read .env, kee
     if os.getenv("PC_SDK_SUBSCRIPTION_KEY"):  # free Planetary Computer key: higher download limits
         values["PC_SDK_SUBSCRIPTION_KEY"] = os.environ["PC_SDK_SUBSCRIPTION_KEY"]
     for key in ("AISSTREAM_API_KEY",            # live ship dots on the map; optional
-                "OPENWATERS_TOKEN"):            # Open Waters shore AIS: higher area cap; optional
+                "OPENWATERS_TOKEN",             # Open Waters shore AIS: higher area cap; optional
+                "VESSELAPI_KEY"):               # on-demand "Fill this view" (150 requests a month); optional
         if os.getenv(key):
             values[key] = os.environ[key]
     values["GFW_API_TOKEN"] = GFW_API_TOKEN

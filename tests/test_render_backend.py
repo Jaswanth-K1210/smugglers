@@ -101,3 +101,10 @@ def test_render_server_validates_without_the_image_stack():
             "heavy = [m for m in ('rasterio','numpy','pandas','torch','ultralytics') if m in sys.modules]; "
             "print(heavy); assert not heavy")
     assert subprocess.run([sys.executable, "-c", code], capture_output=True).returncode == 0
+
+
+def test_health_says_search_is_available_in_worker_mode(monkeypatch):
+    monkeypatch.setattr(backend, "SEARCH_MODE", "worker")
+    monkeypatch.delenv("HF_MODEL_REPO", raising=False)
+    h = TestClient(backend.app).get("/api/health").json()
+    assert h["search_available"] is True and h["search_mode"] == "worker"

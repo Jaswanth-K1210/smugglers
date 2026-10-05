@@ -239,7 +239,9 @@ def health():
         "eventCount": count,
         "events_file": EVENTS.name if EVENTS.exists() else None,
         "live_detection": has_weights,
-        "search_available": has_weights or bool(os.getenv("HF_MODEL_REPO")),
+        # worker mode: the model runs on Modal, so this server needs no weights of its own
+        "search_available": SEARCH_MODE == "worker" or has_weights or bool(os.getenv("HF_MODEL_REPO")),
+        "search_mode": SEARCH_MODE,
         "liveDetectionAvailable": has_weights,
     }
 

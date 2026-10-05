@@ -57,6 +57,13 @@ def main():
 
     bad = requests.post(f"{B}/api/search", json={"bbox": [56.4, 25.1, 56.41, 25.11]}, headers=H, timeout=60)
     check("tiny box refused with a reason", bad.status_code == 422 and "at least" in bad.json().get("detail", ""))
+    if API_ONLY:                                  # worker mode: any size and period, estimated before Go
+        est = requests.post(f"{B}/api/search/estimate", headers=H, timeout=120,
+                            json={"bbox": [55.8, 25.3, 57.25, 26.8], "start": "2026-09-06", "end": "2026-10-05"})
+        e = est.json() if est.ok else {}
+        check("145 x 166 km, 30 days: estimated, not refused", est.ok and e.get("units", 0) > 0,
+              f"{e.get('passes')} passes, {e.get('cells')} cells, {e.get('units')} units, ~{e.get('minutes')} min, "
+              f"${e.get('usd')}" if est.ok else est.text[:120])
 
     job = requests.post(f"{B}/api/search", json={"bbox": BOX}, headers=H, timeout=120)
     check("search starts", job.ok, job.text[:80] if not job.ok else "")

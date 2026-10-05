@@ -55,52 +55,20 @@ os.environ.setdefault("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tiff,.tif")
 
 
 def search(start: str, end: str, box=None, limit: int = 50, mode: str = "IW"):
-    """Sentinel-1 GRD scenes overlapping the AOI. Dates are YYYY-MM-DD.
-
-    Returns items newest-first, deduplicated to one per acquisition — the STAC
-    catalogue carries a few near-identical entries per overpass.
-    """
-    box = box or default_bbox()
-    r = requests.post(
-        f"{STAC}/search",
-        json={
-            "collections": ["sentinel-1-grd"],
-            "bbox": list(box),
-            "datetime": f"{start}T00:00:00Z/{end}T23:59:59Z",
-            "query": {"sar:instrument_mode": {"eq": mode}},
-            "limit": limit,
-        },
-        timeout=90,
-    )
-    r.raise_for_status()
-    items, seen = [], set()
-    for f in r.json().get("features", []):
-        key = f["properties"]["datetime"]
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append(f)
-    return sorted(items, key=lambda f: f["properties"]["datetime"], reverse=True)
+    """Sentinel-1 GRD scenes overlapping the AOI, newest first, one per acquisition (src.plan)."""
+    from src import plan
+    return plan.stac_search(start, end, box or default_bbox(), limit=limit, mode=mode)
 
 
 def overlap(item, box=None) -> float:
-    """Fraction of the AOI covered by this scene's footprint, 0..1.
+    """Fraction of the AOI covered by this scene's real footprint, 0..1 (src.plan).
 
     A single IW slice is much smaller than a multi-degree AOI, so picking a
     scene by recency alone lands on whichever corner the satellite happened to
     cross — often solid land. Rank by overlap instead.
     """
-    lo_lon, lo_lat, hi_lon, hi_lat = box or default_bbox()
-    if item.get("geometry"):
-        # The real footprint: an IW strip is tilted, so its bounding box can
-        # claim 70 % coverage of a box the strip only clips (14 % in one case).
-        from shapely.geometry import box as rect, shape
-        aoi = rect(lo_lon, lo_lat, hi_lon, hi_lat)
-        return shape(item["geometry"]).intersection(aoi).area / aoi.area
-    b = item["bbox"]
-    w = max(0.0, min(b[2], hi_lon) - max(b[0], lo_lon))
-    h = max(0.0, min(b[3], hi_lat) - max(b[1], lo_lat))
-    return w * h / ((hi_lon - lo_lon) * (hi_lat - lo_lat))
+    from src import plan
+    return plan.overlap(item, box or default_bbox())
 
 
 _tokens = {}

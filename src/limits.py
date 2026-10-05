@@ -6,8 +6,8 @@ request without loading the image-processing stack; src.search re-exports these.
 import math
 from datetime import date, datetime, timedelta, timezone
 
-MIN_KM, MAX_KM = 11, 60                 # one 1024 px tile ... the free-CPU time budget
-MAX_PERIOD_DAYS, MAX_PASSES = 31, 6     # time-period search (docs/DEPLOYMENT_PLAN.md §2)
+MIN_KM, MAX_KM = 11, 60                 # one 1024 px tile ... one-pass searches (local mode)
+MAX_PERIOD_DAYS = 31                    # local mode only; the worker has no period limit (src.plan)
 DEFAULT_DAYS = 12                       # no dates given: the last 12 days (Sentinel-1 revisit ~6 days)
 ARCHIVE_START = date(2014, 10, 3)       # first Sentinel-1 IW data on Planetary Computer
 
@@ -17,8 +17,10 @@ def box_km(box):
     return ((lon1 - lon0) * 111.32 * math.cos(math.radians((lat0 + lat1) / 2)), (lat1 - lat0) * 110.57)
 
 
-def validate(box):
-    """(west, south, east, north) as floats; ValueError with a sentence a user can act on."""
+def validate(box, max_km=MAX_KM):
+    """(west, south, east, north) as floats; ValueError with a sentence a user can act on.
+
+    max_km=None: no upper size (the worker cuts a large box into cells, src.plan)."""
     if len(box) != 4:
         raise ValueError("Send the box as [west, south, east, north].")
     lon0, lat0, lon1, lat1 = map(float, box)
@@ -27,8 +29,8 @@ def validate(box):
     w, h = box_km(box)
     if min(w, h) < MIN_KM:
         raise ValueError(f"Draw a box at least {MIN_KM} km on each side (this one is {w:.0f} × {h:.0f} km).")
-    if max(w, h) > MAX_KM:
-        raise ValueError(f"Draw a box at most {MAX_KM} km on each side (this one is {w:.0f} × {h:.0f} km).")
+    if max_km and max(w, h) > max_km:
+        raise ValueError(f"Draw a box at most {max_km} km on each side (this one is {w:.0f} × {h:.0f} km).")
     return lon0, lat0, lon1, lat1
 
 
@@ -40,8 +42,8 @@ def _day(v):
     return date.fromisoformat(str(v)[:10])
 
 
-def validate_period(start, end, today=None):
-    """(start, end) as dates; ValueError with a sentence a user can act on."""
+def validate_period(start, end, today=None, max_days=MAX_PERIOD_DAYS):
+    """(start, end) as dates; ValueError with a sentence a user can act on. max_days=None: any length."""
     try:
         a, b = _day(start), _day(end)
     except (ValueError, TypeError):
@@ -53,8 +55,8 @@ def validate_period(start, end, today=None):
         raise ValueError("The end date is in the future.")
     if a < ARCHIVE_START:
         raise ValueError(f"Sentinel-1 images start on {ARCHIVE_START:%d %b %Y}; pick a later start date.")
-    if (b - a).days + 1 > MAX_PERIOD_DAYS:
-        raise ValueError(f"Pick a period of at most {MAX_PERIOD_DAYS} days (this one is {(b - a).days + 1}).")
+    if max_days and (b - a).days + 1 > max_days:
+        raise ValueError(f"Pick a period of at most {max_days} days (this one is {(b - a).days + 1}).")
     return a, b
 
 

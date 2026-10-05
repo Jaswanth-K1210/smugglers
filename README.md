@@ -172,7 +172,8 @@ python3 scripts/check_live.py                # 18 end-to-end checks against the 
 
 | Endpoint | Returns |
 | -------- | ------- |
-| `POST /api/search` | starts a search over `{"bbox": [west, south, east, north]}` (11–60 km a side, sign-in) |
+| `POST /api/search/estimate` | before Go: passes, 50 km cells, pieces of work, minutes and credit for `{"bbox", "start", "end"}` |
+| `POST /api/search` | starts a search over `{"bbox": [west, south, east, north], "start", "end"}` (any size and period on Render + Modal; 11–60 km and the newest pass in the all-in-one app; sign-in) |
 | `GET /api/search/{id}` | progress stage, then ships with reasons, evidence points, radar chips, STS pairs |
 | `GET /api/live` | live AIS positions for the map |
 | `GET /api/events` | precomputed candidates |

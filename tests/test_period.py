@@ -2,7 +2,7 @@
 import pandas as pd
 import pytest
 
-from src import dark_sts, search
+from src import dark_sts, plan, search
 
 BOX = (56.35, 25.05, 56.65, 25.35)
 TODAY = "2026-10-05"
@@ -32,14 +32,49 @@ def _item(i, cover):
             "geometry": {"type": "Polygon", "coordinates": [full if cover else sliver]}}
 
 
-def test_passes_newest_first_real_footprint_and_capped(monkeypatch):
-    items = [_item(i, cover=i != 2) for i in range(9)]               # P2 only clips a corner
-    monkeypatch.setattr(search.fetch_s1, "search", lambda *a, **k: items)
-    picked, found = search.period_passes(BOX, "2026-09-01", "2026-09-30")
-    assert found == 8 and [p["id"] for p in picked] == ["P0", "P1", "P3", "P4", "P5", "P6"]
-    monkeypatch.setattr(search.fetch_s1, "search", lambda *a, **k: [_item(0, cover=False)])
+def test_worker_has_no_period_or_size_limit():
+    a, b = search.validate_period("2025-01-01", "2026-10-01", today=TODAY, max_days=None)
+    assert (b - a).days == 638
+    assert search.validate((55.0, 24.0, 57.0, 26.0), max_km=None) == (55.0, 24.0, 57.0, 26.0)
+
+
+def test_plan_cuts_a_large_box_into_cells_per_pass():
+    big = (56.0, 24.8, 57.4, 26.3)                                   # ~141 x 166 km
+    cores = plan.cells(big)
+    assert len(cores) == 3 * 4 and all(max(plan.km(c)) <= plan.CELL_KM for c in cores)
+    assert sum(plan.km(c)[0] * plan.km(c)[1] for c in cores) == pytest.approx(
+        plan.km(big)[0] * plan.km(big)[1], rel=0.01)                 # cores tile the box exactly
+    g = plan.grow(cores[0], big)
+    assert g[:2] == big[:2] and g[2] > cores[0][2] and g[3] > cores[0][3]   # grown inward, clipped outside
+    west = {"id": "W", "properties": {"datetime": "2026-09-20T02:14:00Z"}, "bbox": [55, 24, 58, 27],
+            "geometry": {"type": "Polygon", "coordinates": [[[55.9, 24.7], [56.5, 24.7], [56.5, 26.4],
+                                                             [55.9, 26.4], [55.9, 24.7]]]}}
+    east = {**west, "id": "E", "properties": {"datetime": "2026-09-20T02:14:25Z"},
+            "geometry": {"type": "Polygon", "coordinates": [[[56.4, 24.7], [57.5, 24.7], [57.5, 26.4],
+                                                             [56.4, 26.4], [56.4, 24.7]]]}}
+    p = plan.make_plan(big, "2026-09-01", "2026-09-30", items=[west])
+    assert p["passes_found"] == 1 and p["units"] == 4               # only the western column of cells
+    two = plan.make_plan(big, "2026-09-01", "2026-09-30", items=[east, west])   # two slices of one pass
+    assert two["passes_found"] == 1 and two["units"] == 12           # every cell once, by its best slice
+    assert {it["id"] for it, c in two["passes"][0]["units"] if c == cores[0]} == {"W"}
+    assert p["estimate"]["minutes"] >= 2 and not p["estimate"]["over_limit"]
     with pytest.raises(LookupError, match="No Sentinel-1 pass"):
-        search.period_passes(BOX, "2026-09-01", "2026-09-30")
+        plan.make_plan(big, "2026-09-01", "2026-09-30", items=[])
+
+
+def test_merge_cells_counts_a_hull_in_two_cells_once():
+    cores = [(56.0, 25.0, 56.5, 25.5), (56.5, 25.0, 57.0, 25.5)]
+    ship = lambda lon, cat=dark_sts.AIS_UNMATCHED: {"id": 0, "lat": 25.2, "lon": lon, "category": cat,
+                                                    "length_m": 200, "weak": False}
+    a = {"scene": {"time": "t"}, "ships": [ship(56.2), ship(56.503)], "sts": [{"lat": 25.2, "lon": 56.501, "without_ais": 1}],
+         "ais_available": True, "scene_note": None}
+    b = {"scene": {"time": "t"}, "ships": [ship(56.503), ship(56.8, dark_sts.AIS_VISIBLE)],
+         "sts": [{"lat": 25.2, "lon": 56.501, "without_ais": 1}], "ais_available": True}
+    out = search.merge_cells([a, b], cores)
+    assert [s["lon"] for s in out["ships"]] == [56.2, 56.503, 56.8] and [s["id"] for s in out["ships"]] == [0, 1, 2]
+    assert len(out["sts"]) == 1 and out["counts"]["ships"] == 3 and out["cells_failed"] == 0
+    part = search.merge_cells([a, {"error": "HTTP 429 from x"}], cores)
+    assert part["cells_failed"] == 1 and "1 of 2 areas" in part["scene_note"]
 
 
 def _pass(t, ships):

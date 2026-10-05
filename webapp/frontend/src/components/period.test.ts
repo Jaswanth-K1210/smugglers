@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultPeriod, periodError, MAX_PERIOD_DAYS } from './AreaSearch'
+import { defaultPeriod, periodError } from './AreaSearch'
 import { isFailedPass, passesOf } from '../services/api'
 
 describe('time-period limits (mirror src/limits.py)', () => {
@@ -12,11 +12,10 @@ describe('time-period limits (mirror src/limits.py)', () => {
     expect(periodError(['2026-09-10', '2026-09-01'])).toMatch(/before the start/)
     expect(periodError(['2026-09-01', '2999-01-01'])).toMatch(/future/)
     expect(periodError(['2014-01-01', '2014-01-20'])).toMatch(/3 Oct 2014/)
-    expect(periodError(['2026-08-01', '2026-09-15'])).toMatch(new RegExp(`at most ${MAX_PERIOD_DAYS} days`))
     expect(periodError(['', '2026-09-01'])).toMatch(/Pick a start/)
   })
-  it('accepts exactly 31 days', () => {
-    expect(periodError(['2026-08-01', '2026-08-31'])).toBeNull()
+  it('accepts a period of any length (the estimate shows the cost)', () => {
+    expect(periodError(['2025-01-01', '2026-08-31'])).toBeNull()
   })
 })
 

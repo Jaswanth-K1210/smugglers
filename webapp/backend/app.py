@@ -367,8 +367,9 @@ HF_MODEL_REPO = os.getenv("HF_MODEL_REPO")            # e.g. "<user>/darksts-det
 SEARCH_WEIGHTS = os.getenv("SEARCH_WEIGHTS", "best.pt")
 _executor = ThreadPoolExecutor(max_workers=1)
 MAX_QUEUE = 5                 # searches waiting or running, all users together
-DAILY_SEARCHES = 20           # per account; each costs ~2 CPU-minutes of free credit per pass
-STALE_S = 1800                # a search not finished in 30 min no longer blocks its user
+DAILY_SEARCHES = 20           # per account
+STALE_S = 6 * 3600            # a search not finished in 6 h no longer blocks its user (worker timeout)
+DAILY_UNITS = int(os.getenv("SEARCH_DAILY_UNITS", 400))   # per account; one unit = one pass x one 50 km cell, ~$0.004
 # local: this server runs the model (the all-in-one Modal app). worker: the Modal worker
 # app "darksts-worker" runs it, and this server only starts and polls (Render).
 SEARCH_MODE = os.getenv("SEARCH_MODE", "local")
@@ -404,22 +405,66 @@ def _run_search(job_id, box, weights):
 
 
 def _period(payload):
-    """(start, end) dates: from the request, or the default recent window."""
+    """(start, end) dates: from the request, or the default recent window. Any length in worker mode."""
     from src import limits
     if payload.get("start") or payload.get("end"):
-        return limits.validate_period(payload.get("start"), payload.get("end"))
+        return limits.validate_period(payload.get("start"), payload.get("end"),
+                                      max_days=None if SEARCH_MODE == "worker" else limits.MAX_PERIOD_DAYS)
     return limits.default_period()
+
+
+def _box(payload):
+    from src.limits import MAX_KM, validate
+    return validate(payload.get("bbox") or [], max_km=None if SEARCH_MODE == "worker" else MAX_KM)
+
+
+def _plan(payload):
+    """(box, start, end, plan) for a worker search; HTTP 422 with a sentence when it cannot run."""
+    from src import plan
+    try:
+        box = _box(payload)
+        start, end = _period(payload)
+        return box, start, end, plan.make_plan(box, start, end)
+    except (ValueError, TypeError) as e:
+        raise HTTPException(422, str(e) or "Send the box as [west, south, east, north].")
+    except LookupError as e:
+        raise HTTPException(422, str(e))
+
+
+def _units_today(email, now):
+    return sum(j.get("units") or 0 for j in _searches().since(email, now - 86400))
+
+
+@app.post("/api/search/estimate")
+def estimate_search(payload: dict, user: dict = Depends(current_user)):
+    """Passes, cells, minutes and credit for {"bbox", "start"?, "end"?}, before Go. Worker mode only."""
+    if SEARCH_MODE != "worker":
+        raise HTTPException(404, "Estimates are for period searches (worker mode).")
+    from src import plan
+    _, start, end, p = _plan(payload)
+    left = DAILY_UNITS - _units_today(user["email"], time.time())
+    return {**plan.summary(p), "period": [str(start), str(end)], "daily_units_left": max(0, left),
+            "over_daily": p["units"] > left}
 
 
 @app.post("/api/search")
 def start_search(payload: dict, user: dict = Depends(current_user)):
     """Start a search over {"bbox": [w, s, e, n], "start"?: "YYYY-MM-DD", "end"?: ...}; poll /api/search/{id}."""
-    from src.limits import validate
-    try:
-        box = validate(payload.get("bbox") or [])
-        start, end = _period(payload) if SEARCH_MODE == "worker" else (None, None)
-    except (ValueError, TypeError) as e:
-        raise HTTPException(422, str(e) or "Send the box as [west, south, east, north].")
+    if SEARCH_MODE == "worker":
+        from src import plan
+        box, start, end, p = _plan(payload)
+        units = p["units"]
+        if p["estimate"]["over_limit"]:
+            raise HTTPException(422, f"This search is {units} pieces of work; the limit is {plan.MAX_UNITS}. "
+                                     "Pick a shorter period or a smaller area.")
+        if units > DAILY_UNITS - _units_today(user["email"], time.time()):
+            raise HTTPException(429, f"This search ({units} pieces of work) is more than is left of your daily "
+                                     f"{DAILY_UNITS}. Pick a shorter period or a smaller area, or try tomorrow.")
+    else:
+        try:
+            box, start, end, units = _box(payload), None, None, None
+        except (ValueError, TypeError) as e:
+            raise HTTPException(422, str(e) or "Send the box as [west, south, east, north].")
     weights = search_weights() if SEARCH_MODE == "local" else None
     now = time.time()
     active = [j for j in _searches().active() if now - j["created"] < STALE_S]
@@ -435,7 +480,7 @@ def start_search(payload: dict, user: dict = Depends(current_user)):
            "stage": "Waiting for the previous search to finish" if ahead else "Starting",
            "queue_position": ahead, "user": user["email"], "created": now}
     if SEARCH_MODE == "worker":
-        row.update(period=[str(start), str(end)], status="running")
+        row.update(period=[str(start), str(end)], status="running", units=units, estimate=plan.summary(p))
         try:
             row["call_id"] = worker.spawn(box, start, end, job_id)
         except Exception as e:
@@ -445,7 +490,8 @@ def start_search(payload: dict, user: dict = Depends(current_user)):
     else:
         _searches().add(row)
         _executor.submit(_run_search, job_id, box, weights)
-    return {"job_id": job_id, "queue_position": ahead, **({"period": row["period"]} if "period" in row else {})}
+    return {"job_id": job_id, "queue_position": ahead,
+            **{k: row[k] for k in ("period", "estimate") if k in row}}
 
 
 def _worker_status(job):
@@ -465,10 +511,12 @@ def _worker_status(job):
         _set(job["job_id"], status="done", progress=1.0)
         return {"job_id": job["job_id"], "status": "done", "progress": 1.0, "stage": "Done",
                 "period": job.get("period"), "result": res}
-    n = st["passes"]
-    stage = (f"Searching {n} satellite pass{'es' if n != 1 else ''}" if n else "Finding satellite passes")
+    n, u = st["passes"], st.get("units") or 0
+    stage = (f"Searching {n} satellite pass{'es' if n != 1 else ''}" + (f" in {u} pieces" if u > n else "")
+             if n else "Finding satellite passes")
     return {"job_id": job["job_id"], "status": "running", "progress": st["progress"], "stage": stage,
-            "stages": st["stages"], "passes": n, "passes_found": st["passes_found"], "period": job.get("period")}
+            "stages": st["stages"], "passes": n, "passes_found": st["passes_found"], "period": job.get("period"),
+            "estimate": job.get("estimate")}
 
 
 @app.get("/api/search/{job_id}")

@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from src import context, dark_sts, fetch_s1, gfw, hunt, match, regional_ais
-from src.limits import (MAX_KM, MAX_PASSES, MAX_PERIOD_DAYS, MIN_KM, box_km,  # noqa: F401  re-exported
+from src.limits import (MAX_KM, MAX_PERIOD_DAYS, MIN_KM, box_km,  # noqa: F401  re-exported
                         validate, validate_period)
 from src.config import DATA
 
@@ -369,16 +369,30 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
     return result
 
 
-def period_passes(box, start, end, max_passes=MAX_PASSES):
-    """(passes to search, passes found): real-footprint coverage >= 50 %, newest first."""
-    box = validate(box)
-    a, b = validate_period(start, end)
-    items = fetch_s1.search(f"{a:%Y-%m-%d}", f"{b:%Y-%m-%d}", box=box, limit=200)
-    items = [i for i in items if fetch_s1.overlap(i, box) >= MIN_OVERLAP]
-    if not items:
-        raise LookupError("No Sentinel-1 pass covered at least half of this box in that period. "
-                          "Try a longer period, a larger box or one further from the coast.")
-    return items[:max_passes], len(items)
+def merge_cells(parts, cores):
+    """One pass result from its cells (src.plan): each cell keeps only the ships and pairs inside its
+    own core, and the cores tile the box, so a hull searched by two overlapping cells counts once."""
+    ok = [(p, c) for p, c in zip(parts, cores) if "error" not in p]
+    if not ok:
+        return parts[0]
+    inside = lambda o, c: c[0] <= o["lon"] <= c[2] and c[1] <= o["lat"] <= c[3]
+    ships = [s for p, c in ok for s in p["ships"] if inside(s, c)]
+    ships.sort(key=lambda s: (s.get("weak", False), s["category"] != dark_sts.AIS_UNMATCHED, -(s["length_m"] or 0)))
+    for n, s in enumerate(ships):
+        s["id"] = n
+    sts = [s for p, c in ok for s in p["sts"] if inside(s, c)]
+    out = {**ok[0][0], "ships": ships, "sts": sts, "counts": counts(ships, sts),
+           "bbox": [min(c[0] for c in cores), min(c[1] for c in cores), max(c[2] for c in cores),
+                    max(c[3] for c in cores)],
+           "ais_available": next((p["ais_available"] for p, _ in ok if p.get("ais_available")),
+                                 ok[0][0].get("ais_available")),
+           "cached": all(p.get("cached") for p, _ in ok),
+           "cells": len(parts), "cells_failed": len(parts) - len(ok)}
+    if len(ok) < len(parts):
+        failed = "; ".join(sorted({p["error"] for p in parts if "error" in p}))
+        out["scene_note"] = " ".join(filter(None, [out.get("scene_note"), f"{len(parts) - len(ok)} of {len(parts)} "
+                                                   f"areas of this pass could not be searched ({failed})."]))
+    return out
 
 
 def combine(passes, found=None, radius_m=RECUR_M):

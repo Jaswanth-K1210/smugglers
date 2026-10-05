@@ -187,6 +187,21 @@ export interface PeriodResult {
 export const passesOf = (r: SearchResult | PeriodResult | null | undefined): PassResult[] =>
   !r ? [] : 'passes' in r ? r.passes : [r]
 
+/** Before Go: the passes in the period, the 50 km cells of the box, and what it will take. */
+export interface SearchEstimate {
+  passes: number
+  cells: number
+  units: number                     // one pass over one cell
+  minutes: number
+  usd: number
+  max_units: number
+  over_limit: boolean
+  daily_units_left: number
+  over_daily: boolean
+  first: string
+  last: string
+}
+
 export interface SearchJob {
   job_id: string
   status: 'queued' | 'running' | 'done' | 'error'
@@ -374,6 +389,10 @@ export const apiService = {
   async startSearch(bbox: BBox, start?: string, end?: string): Promise<{ job_id: string; queue_position: number; period?: [string, string] }> {
     // generous timeout: both the backend and the worker may be waking from sleep
     return (await api.post('/search', { bbox, ...(start && end ? { start, end } : {}) }, { timeout: 120000 })).data
+  },
+
+  async estimateSearch(bbox: BBox, start: string, end: string): Promise<SearchEstimate> {
+    return (await api.post('/search/estimate', { bbox, start, end }, { timeout: 60000 })).data
   },
 
   async getSearch(jobId: string): Promise<SearchJob> {

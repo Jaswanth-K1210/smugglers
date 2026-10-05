@@ -67,13 +67,20 @@ split:
 
 Today the search uses the newest pass over the box that already has AIS. With a period:
 
-1. The user picks a box (11-60 km a side, as now) and a date range.
-2. `search_period` lists every Sentinel-1 pass in the range whose **real footprint**
-   covers >= 50 % of the box (the existing `search.scenes` rule).
-3. Limits: range <= **31 days**, at most **6 passes** (newest first). Sentinel-1 C + D
-   pass over a point roughly every 2-6 days, so a month is usually 5-12 passes.
-4. Each pass runs `search_pass`, 3 in parallel: download, detect, AIS, hulls, pairs,
-   reasons (`search.run_pass`, the same logic as the single-pass search).
+1. The user picks a box of **any size** (at least 11 km a side) and a date range of
+   **any length** (changed 2026-10-06; the first version capped 60 km and 31 days / 6 passes).
+2. `src/plan.py` cuts the box into cells of at most 50 km and lists every Sentinel-1
+   pass in the range (STAC slices ~25 s apart are one pass). Each cell goes to the
+   slice whose **real footprint** covers it best, if that is >= 50 %. One (pass, cell)
+   is one **unit** of work.
+3. Before Go, `POST /api/search/estimate` returns passes, cells, units, minutes and
+   about how much Modal credit it uses (~$0.004 a unit); the website shows it. The only
+   ceilings are on work, not shape: `SEARCH_MAX_UNITS` per search (default 200, ~1.4 h)
+   and `SEARCH_DAILY_UNITS` per account per day (default 400). Example: a 145 x 166 km
+   box over 30 days in the Gulf is 18 passes, 142 units, about an hour, ~$0.51.
+4. Each unit runs `search_pass` on its cell grown by 0.6 km, 4 in parallel (`search.run_pass`,
+   the same logic as the single-pass search). `search.merge_cells` keeps each ship and
+   pair only from the cell whose core contains it, so a hull on a cell edge counts once.
 5. The page shows a **timeline**: one dot per pass, with ship and no-AIS counts; clicking
    a pass shows its ships on the map. A ship seen without AIS on several passes at the
    same spot is flagged as "recurring" (likely a fixed structure or a ship at anchor).

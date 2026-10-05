@@ -1,11 +1,12 @@
 import React from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
-import { isFailedPass, passesOf } from '../services/api'
-import type { BBox, SearchJob, SearchShip } from '../services/api'
+import { apiService, isFailedPass, passesOf } from '../services/api'
+import type { BBox, SearchEstimate, SearchJob, SearchShip } from '../services/api'
 import { STATUS } from '../status'
 import { Panel } from './Panel'
 
-// Mirrors src/search.py: one 1024 px tile at minimum, the free-CPU budget at maximum.
+// Mirrors src/limits.py: one 1024 px tile at minimum; the maximum is for one-pass (local) searches only,
+// period searches cut any box into 50 km cells (src/plan.py).
 const MIN_KM = 11
 const MAX_KM = 60
 /** A `km` × `km` box around the centre of `b`: the fix offered for a box drawn too large. */
@@ -20,9 +21,7 @@ export const boxKm = (b: BBox) => [
   (b[3] - b[1]) * 110.57,
 ]
 
-// Mirrors src/limits.py: time-period search.
-export const MAX_PERIOD_DAYS = 31
-export const MAX_PASSES = 6
+// Mirrors src/limits.py: time-period search (any length; the estimate shows what it will take).
 export const DEFAULT_DAYS = 12
 const ARCHIVE_START = '2014-10-03'
 const isoDay = (d: Date) => d.toISOString().slice(0, 10)
@@ -34,9 +33,26 @@ export const periodError = ([start, end]: [string, string]): string | null => {
   if (!start || !end) return 'Pick a start and an end date.'
   if (end < start) return 'The end date is before the start date.'
   if (end > isoDay(new Date())) return 'The end date is in the future.'
-  if (start < ARCHIVE_START) return 'Sentinel-1 images start on 3 Oct 2014.'
-  const days = Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1
-  return days > MAX_PERIOD_DAYS ? `Pick a period of at most ${MAX_PERIOD_DAYS} days (this one is ${days}).` : null
+  return start < ARCHIVE_START ? 'Sentinel-1 images start on 3 Oct 2014.' : null
+}
+
+const EstimateLine: React.FC<{ est: { data?: SearchEstimate; error?: string; loading?: boolean } }> = ({ est }) => {
+  if (est.loading) return <p className="text-[11px] text-ink-3">Counting satellite passes…</p>
+  if (est.error) return <p className="text-xs text-partial">{est.error}</p>
+  const e = est.data
+  if (!e) return null
+  return (
+    <div className="space-y-1 border border-rule px-2 py-1.5 text-[11px] leading-snug">
+      <p className="text-ink">
+        {e.passes} pass{e.passes === 1 ? '' : 'es'} ({day(e.first).slice(0, 11)} to {day(e.last).slice(0, 11)})
+        {e.cells > 1 ? ` over ${e.cells} areas of up to 50 km` : ''}: {e.units} piece{e.units === 1 ? '' : 's'} of work.
+      </p>
+      <p className="text-ink-2">About {e.minutes < 2 ? '2 minutes' : e.minutes < 90 ? `${e.minutes} minutes` : `${(e.minutes / 60).toFixed(1)} hours`},
+        ≈ ${e.usd.toFixed(2)} of free cloud credit.</p>
+      {e.over_limit && <p className="text-partial">More than the {e.max_units}-piece limit for one search: pick a shorter period or a smaller area.</p>}
+      {!e.over_limit && e.over_daily && <p className="text-partial">You have {e.daily_units_left} pieces left today: pick a shorter period or a smaller area.</p>}
+    </div>
+  )
 }
 const day = (t: string) => new Date(t).toUTCString().slice(5, 22)
 
@@ -63,7 +79,8 @@ const Scanner: React.FC<{ job: SearchJob | null; stages: string[] }> = ({ job, s
       // period search: one line per pass with its own state (index keys: many lines read "waiting")
       <ol className="space-y-0.5 text-[11px] text-ink-3" aria-label="Passes">
         {job.stages.map((s, i) => {
-          const state = / failed/.test(s) ? 'failed' : /: (done|Done)$/.test(s) ? 'done' : s === 'waiting' ? 'waiting' : 'running'
+          const state = / failed/.test(s) ? 'failed' : /: (done|Done)$/.test(s) || /(\d+) of \1 areas done$/.test(s) ? 'done'
+            : s === 'waiting' || /: waiting$/.test(s) ? 'waiting' : 'running'
           const mark = { failed: '✗', done: '✓', waiting: '·', running: '>' }[state]
           const tone = { failed: 'text-unmatched', done: 'text-ink-3', waiting: 'text-ink-3', running: 'text-signal' }[state]
           return (
@@ -144,10 +161,10 @@ export const AreaSearch: React.FC<{
   onBox: (b: BBox) => void
 }> = ({ drawing, onDraw, box, onClear, onGo, job, stages, openShip, onShip, period, onPeriod, periodSearch, pass, onPass, onBox }) => {
   const [w, h] = box ? boxKm(box) : [0, 0]
-  const sizeError = box && (Math.min(w, h) < MIN_KM || Math.max(w, h) > MAX_KM)
-    ? `Boxes must be ${MIN_KM}–${MAX_KM} km on each side (one satellite image area). This one is ${w.toFixed(0)} × ${h.toFixed(0)} km.`
-    : null
-  const tooBig = !!box && Math.max(w, h) > MAX_KM
+  const tooBig = !!box && !periodSearch && Math.max(w, h) > MAX_KM
+  const sizeError = box && Math.min(w, h) < MIN_KM
+    ? `Draw a box at least ${MIN_KM} km on each side (one satellite image tile). This one is ${w.toFixed(0)} × ${h.toFixed(0)} km.`
+    : tooBig ? `Boxes must be ${MIN_KM}–${MAX_KM} km on each side here. This one is ${w.toFixed(0)} × ${h.toFixed(0)} km.` : null
   const busy = job?.status === 'queued' || job?.status === 'running'
   const full = job?.status === 'done' ? job.result : undefined
   const passes = passesOf(full)
@@ -159,6 +176,18 @@ export const AreaSearch: React.FC<{
   const setShowWeak = useDashboardStore((s) => s.setShowWeak)
   const ships = result ? result.ships.filter((s) => showWeak || !s.weak) : []
   const nWeak = result?.counts.weak_candidates ?? 0
+  const [est, setEst] = React.useState<{ data?: SearchEstimate; error?: string; loading?: boolean }>({})
+  const boxKey = box?.join() ?? ''
+  React.useEffect(() => {               // the estimate follows the box and dates, debounced
+    if (!periodSearch || !box || sizeError || dateError || busy || full) { setEst({}); return }
+    let live = true
+    setEst({ loading: true })
+    const t = setTimeout(() => apiService.estimateSearch(box, period[0], period[1])
+      .then((data) => live && setEst({ data }))
+      .catch((e) => live && setEst({ error: e?.response?.data?.detail ?? 'Could not count the passes. Try again in a minute.' })), 600)
+    return () => { live = false; clearTimeout(t) }
+  }, [periodSearch, boxKey, period[0], period[1], !!sizeError, !!dateError, busy, !!full])
+  const estBlocks = periodSearch && (!est.data || est.data.over_limit || est.data.over_daily)
 
   return (
     <Panel title="Area search" right={box && <span className="text-[10px] text-ink-3">{w.toFixed(0)} × {h.toFixed(0)} km</span>} bodyClassName="space-y-3 p-3">
@@ -168,7 +197,7 @@ export const AreaSearch: React.FC<{
             {drawing
               ? 'Drag on the map to draw a box over open water.'
               : periodSearch
-                ? 'Draw a box and pick a time period: every Sentinel-1 pass in it is searched and each ship checked against AIS.'
+                ? 'Draw a box of any size and pick a time period: every Sentinel-1 pass in it is searched and each ship checked against AIS. You see how long it will take before you press Go.'
                 : 'Draw a box to run the detector on the newest Sentinel-1 pass over it and check every ship against AIS.'}
           </p>
           <button onClick={onDraw} className={drawing ? 'btn-quiet w-full border-signal text-signal' : 'btn-quiet w-full'}>
@@ -201,16 +230,13 @@ export const AreaSearch: React.FC<{
                     onChange={(e) => onPeriod([period[0], e.target.value])} className="mt-0.5 w-full border border-rule bg-transparent px-1.5 py-1 text-xs text-ink" />
                 </label>
               </div>
-              <p className="text-[11px] text-ink-3">
-                Up to {MAX_PERIOD_DAYS} days. The newest {MAX_PASSES} Sentinel-1 passes in it are searched, 3 at a time
-                (about 2 minutes per 3 passes).
-              </p>
               {dateError && <p className="text-xs text-partial">{dateError}</p>}
             </fieldset>
           )}
+          {periodSearch && <EstimateLine est={est} />}
           {job?.status === 'error' && <p role="alert" className="text-xs text-unmatched">{job.error}</p>}
           <div className="grid grid-cols-[1fr_auto] gap-2">
-            <button onClick={onGo} disabled={!!sizeError || !!dateError} className="btn-primary py-2.5 text-sm">Go</button>
+            <button onClick={onGo} disabled={!!sizeError || !!dateError || estBlocks} className="btn-primary py-2.5 text-sm">Go</button>
             <button onClick={onClear} className="btn-quiet">Redraw</button>
           </div>
         </>

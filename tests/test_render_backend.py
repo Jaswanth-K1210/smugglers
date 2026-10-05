@@ -45,7 +45,34 @@ def worker_mode(mongo, monkeypatch):
     monkeypatch.setattr(backend.worker, "spawn", lambda box, s, e, job: calls["spawned"].append((box, s, e, job)) or "fc-1")
     monkeypatch.setattr(backend.worker, "status", lambda job: calls["status"])
     monkeypatch.setattr(backend.worker, "result", lambda call: calls["result"])
+    from src import plan
+    world = [[-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85]]
+    calls["items"] = [{"id": f"P{i}", "bbox": [-180, -85, 180, 85], "geometry": {"type": "Polygon", "coordinates": [world]},
+                       "properties": {"datetime": f"2026-09-{28 - 6 * i:02d}T02:14:00Z"}} for i in range(3)]
+    monkeypatch.setattr(plan, "stac_search", lambda *a, **k: calls["items"])
     return calls
+
+
+def test_estimate_before_go_any_size_any_period(worker_mode):
+    c = _signed_in(TestClient(backend.app))
+    big = [55.0, 24.0, 57.0, 26.0]                                          # ~200 x 220 km, a year
+    r = c.post("/api/search/estimate", json={"bbox": big, "start": "2025-10-01", "end": "2026-09-30"})
+    assert r.status_code == 200, r.text
+    est = r.json()
+    assert est["passes"] == 3 and est["cells"] == 5 * 5 and est["units"] == 75 and est["minutes"] > 30
+    assert est["first"] < est["last"] and not est["over_limit"] and est["daily_units_left"] == backend.DAILY_UNITS
+    assert c.post("/api/search", json={"bbox": big, "start": "2025-10-01", "end": "2026-09-30"}).status_code == 200
+
+
+def test_work_ceiling_and_daily_budget(worker_mode, monkeypatch):
+    c = _signed_in(TestClient(backend.app))
+    monkeypatch.setattr(backend, "DAILY_UNITS", 10)
+    r = c.post("/api/search", json={"bbox": [55.0, 24.0, 57.0, 26.0]})
+    assert r.status_code == 429 and "daily" in r.json()["detail"]
+    from src import plan
+    monkeypatch.setattr(plan, "MAX_UNITS", 2)
+    r = c.post("/api/search", json={"bbox": BOX})
+    assert r.status_code == 422 and "limit is 2" in r.json()["detail"]
 
 
 def test_worker_mode_spawns_and_polls(worker_mode, mongo):
@@ -98,6 +125,7 @@ def test_render_server_validates_without_the_image_stack():
     import sys
     code = ("import sys; from src.limits import validate, validate_period, default_period; "
             "validate([56.35,25.05,56.65,25.35]); default_period(); "
+            "from src import plan; plan.cells((55, 24, 57, 26)); "
             "heavy = [m for m in ('rasterio','numpy','pandas','torch','ultralytics') if m in sys.modules]; "
             "print(heavy); assert not heavy")
     assert subprocess.run([sys.executable, "-c", code], capture_output=True).returncode == 0

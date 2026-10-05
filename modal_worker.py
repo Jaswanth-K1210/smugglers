@@ -26,7 +26,7 @@ progress = modal.Dict.from_name("darksts-progress", create_if_missing=True)
 models = modal.Volume.from_name("darksts-models", create_if_missing=True)   # scripts/upload_model.py
 
 MODEL_REPO = "Jaswanth-K/darksts-detector"    # best.pt = YOLO26n trained in Colab
-PARALLEL = 3                                    # GFW and Planetary Computer rate-limit wider fan-out
+PARALLEL = 4                                    # = src.plan.PARALLEL (src is not importable at deploy time)
 
 
 def _setup():
@@ -89,23 +89,34 @@ def search_pass(item, box, job_id, index):
         return {"scene": {"id": item["id"], "time": item["properties"]["datetime"]}, "error": msg}
 
 
-@app.function(image=image, cpu=1, memory=1024, timeout=1800, secrets=[modal.Secret.from_dict(values)],
+@app.function(image=image, cpu=1, memory=1024, timeout=6 * 3600, secrets=[modal.Secret.from_dict(values)],
               volumes={"/app/ais": ais})
 def search_period(box, start, end, job_id):
-    """All passes of a period over a box, in parallel; returns search.combine(...)."""
+    """Every pass of a period over a box of any size: (pass, cell) units in parallel, merged per pass,
+    then search.combine(...). The only ceiling is plan.MAX_UNITS (the website shows the estimate first)."""
     _setup()
-    from src import search
+    from src import plan, search
     try:
-        box = search.validate(box)
-        passes, found = search.period_passes(box, start, end)
+        box = search.validate(box, max_km=None)
+        a, b = search.validate_period(start, end, max_days=None)
+        p = plan.make_plan(box, a, b)
+        if p["estimate"]["over_limit"]:
+            raise ValueError(f"This search is {p['units']} pieces of work; the limit is {plan.MAX_UNITS}. "
+                             "Pick a shorter period or a smaller area.")
     except (ValueError, LookupError) as e:
         _put(job_id, "job", status="error", error=str(e))
         raise
-    _put(job_id, "job", status="running", passes=len(passes), found=found)
-    results = list(search_pass.starmap([(it, box, job_id, k) for k, it in enumerate(passes)]))
-    out = search.combine(results, found=found)
-    out.update({"bbox": list(box), "period": [str(start), str(end)]})
-    _put(job_id, "job", status="done", passes=len(passes), found=found)
+    units = [(k, it, core) for k, ps in enumerate(p["passes"]) for it, core in ps["units"]]
+    meta = dict(passes=p["passes_found"], found=p["passes_found"], units=[k for k, _, _ in units],
+                times=[ps["item"]["properties"]["datetime"][:16].replace("T", " ") for ps in p["passes"]])
+    _put(job_id, "job", status="running", **meta)
+    results = list(search_pass.starmap([(it, plan.grow(core, box), job_id, u)
+                                        for u, (k, it, core) in enumerate(units)]))
+    per_pass = [search.merge_cells([r for r, (k2, _, _) in zip(results, units) if k2 == k],
+                                   [c for k2, _, c in units if k2 == k]) for k in range(p["passes_found"])]
+    out = search.combine(per_pass, found=p["passes_found"])
+    out.update({"bbox": list(box), "period": [str(start), str(end)], "plan": plan.summary(p)})
+    _put(job_id, "job", status="done", **meta)
     return out
 
 

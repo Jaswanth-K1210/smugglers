@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useDashboardStore, STSEvent } from '../store/dashboardStore'
-import { apiService, BBox, GfwLayers, LiveFeed, SearchJob, VesselDetail } from '../services/api'
+import { apiService, BBox, GfwLayers, isFailedPass, LiveFeed, passesOf, SearchJob, VesselDetail } from '../services/api'
 import MapComponent, { MapStyle, SHIP_GROUPS } from './Map'
-import { AreaSearch } from './AreaSearch'
+import { AreaSearch, defaultPeriod } from './AreaSearch'
 import { SearchBox } from './SearchBox'
 import { News } from './News'
 import { Menu } from './Menu'
@@ -47,6 +47,13 @@ export const Dashboard: React.FC = () => {
   const [box, setBox] = useState<BBox | null>(null)
   const [job, setJob] = useState<SearchJob | null>(null)
   const [stages, setStages] = useState<string[]>([])
+  const [period, setPeriod] = useState<[string, string]>(defaultPeriod)
+  const [pass, setPass] = useState(0)
+  const [periodSearch, setPeriodSearch] = useState(false)
+  // The Render backend runs time-period searches on the Modal worker; the all-in-one site does not.
+  useEffect(() => {
+    apiService.getHealth().then((h) => setPeriodSearch(h?.search_mode === 'worker')).catch(() => {})
+  }, [])
   const [openShip, setOpenShip] = useState<number | null>(null)
   const [focus, setFocus] = useState<{ lat: number; lon: number; zoom?: number } | null>(null)
   const [fit, setFit] = useState<BBox | null>(null)
@@ -115,9 +122,14 @@ export const Dashboard: React.FC = () => {
     const t = setTimeout(async () => {
       try {
         const next = await apiService.getSearch(job.job_id)
-        if (next.stage) setStages((s) => (s[s.length - 1] === next.stage ? s : [...s, next.stage!]))
+        if (next.stages?.length) setStages(next.stages)              // period search: one live line per pass
+        else if (next.stage) setStages((s) => (s[s.length - 1] === next.stage ? s : [...s, next.stage!]))
         setJob(next)
-        if (next.status === 'done' && next.result?.ships.length) setFit(next.result.bbox ?? box)
+        if (next.status === 'done') {
+          setPass(0)
+          const any = passesOf(next.result).some((p) => !isFailedPass(p) && p.ships.length)
+          if (any) setFit(next.result?.bbox ?? box)
+        }
       } catch (e) {
         setJob({ ...job, status: 'error', error: e instanceof Error ? e.message : 'Lost contact with the search.' })
       }
@@ -126,13 +138,15 @@ export const Dashboard: React.FC = () => {
   }, [job, box])
 
   const onBox = useCallback((b: BBox) => { setBox(b); setDrawing(false); setJob(null) }, [])
-  const clear = () => { setBox(null); setJob(null); setStages([]); setOpenShip(null); setDrawing(true) }
+  const clear = () => { setBox(null); setJob(null); setStages([]); setOpenShip(null); setPass(0); setDrawing(true) }
   const go = async () => {
     if (!box) return
     setStages(['Sending the box'])
     setJob({ job_id: '', status: 'queued', progress: 0, stage: 'Sending the box' })
     try {
-      const { job_id, queue_position } = await apiService.startSearch(box)
+      const { job_id, queue_position } = periodSearch
+        ? await apiService.startSearch(box, period[0], period[1])
+        : await apiService.startSearch(box)
       setJob({ job_id, status: 'queued', progress: 0, queue_position, stage: 'Starting' })
     } catch (e) {
       setJob({ job_id: '', status: 'error', progress: 0, error: e instanceof Error ? e.message : 'The search could not start.' })
@@ -145,7 +159,9 @@ export const Dashboard: React.FC = () => {
     setStages([]); setOpenShip(null); setJob(null); setDrawing(false); setBox(b); setFit(b)
   }
   const scanning = job?.status === 'queued' || job?.status === 'running'
-  const result = job?.status === 'done' ? job.result ?? null : null
+  // The map shows one pass at a time: the one picked in the timeline (a single-pass search is pass 0).
+  const picked0 = job?.status === 'done' ? passesOf(job.result)[pass] : undefined
+  const result = picked0 && !isFailedPass(picked0) ? picked0 : null
 
   const counts = events.reduce<Record<string, number>>((m, e) => ({ ...m, [e.status]: (m[e.status] || 0) + 1 }), {})
   const meanConf = events.length ? events.reduce((s, e) => s + (e.confidence || 0), 0) / events.length : 0
@@ -233,7 +249,8 @@ export const Dashboard: React.FC = () => {
         <aside className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:right-3 md:top-3 md:w-[330px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
           <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />
           <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
-            job={job} stages={stages} openShip={openShip} onShip={setOpenShip} />
+            job={job} stages={stages} openShip={openShip} onShip={setOpenShip}
+            period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
           <FilterPanel />
         </aside>
       </section>

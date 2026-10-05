@@ -1,9 +1,13 @@
 import axios from 'axios'
 import { STSEvent, UserProfile, getToken, useDashboardStore } from '../store/dashboardStore'
 
+// Same origin by default; on Vercel, VITE_API_URL points at the Render backend
+// (e.g. https://smugglers.onrender.com/api).
+const API_URL = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/+$/, '') || '/api'
+
 const api = axios.create({
-  baseURL: '/api',
-  timeout: 10000,
+  baseURL: API_URL,
+  timeout: 30000,                      // Render's free tier can take ~30 s to wake up
 })
 
 api.interceptors.request.use((config) => {
@@ -140,6 +144,7 @@ export interface SearchShip {
   ais_candidates?: AisCandidate[]
   coverage?: string
   weak?: boolean            // detector score below the ship threshold (0.25); hidden by default
+  recurring_passes?: number // period search: AIS-unmatched at this spot on this many passes
 }
 
 export interface SearchResult {
@@ -154,8 +159,31 @@ export interface SearchResult {
   thresholds?: { ship: number; weak: number }
   coverage?: Coverage
   ais_source?: string
+  ais_available?: boolean | null
   note: string
 }
+
+/** A pass of a period search that failed: shown in the timeline with its reason. */
+export interface FailedPass { scene: { id: string; time: string }; error: string }
+export type PassResult = SearchResult | FailedPass
+export const isFailedPass = (p: PassResult): p is FailedPass => 'error' in p
+
+/** Result of a time-period search (Render + Modal worker): one entry per Sentinel-1 pass. */
+export interface PeriodResult {
+  passes: PassResult[]
+  passes_found: number
+  passes_searched: number
+  passes_failed: number
+  recurring: { lat: number; lon: number; passes: number; times: string[] }[]
+  counts: { ships: number; ais_unmatched: number; ais_unmatched_spots: number; weak_candidates: number; sts_pairs: number }
+  note: string | null
+  bbox?: BBox
+  period?: [string, string]
+}
+
+/** Passes of any result, newest first: a single-pass search is a one-pass list. */
+export const passesOf = (r: SearchResult | PeriodResult | null | undefined): PassResult[] =>
+  !r ? [] : 'passes' in r ? r.passes : [r]
 
 export interface SearchJob {
   job_id: string
@@ -164,7 +192,11 @@ export interface SearchJob {
   progress: number
   queue_position?: number
   error?: string
-  result?: SearchResult
+  result?: SearchResult | PeriodResult
+  stages?: string[]                 // period search: one line per pass
+  passes?: number
+  passes_found?: number | null
+  period?: [string, string]
 }
 
 export interface Session {
@@ -333,8 +365,9 @@ export const apiService = {
     return (await api.get('/news', { params: { region }, timeout: 15000 })).data
   },
 
-  async startSearch(bbox: BBox): Promise<{ job_id: string; queue_position: number }> {
-    return (await api.post('/search', { bbox })).data
+  async startSearch(bbox: BBox, start?: string, end?: string): Promise<{ job_id: string; queue_position: number; period?: [string, string] }> {
+    // generous timeout: both the backend and the worker may be waking from sleep
+    return (await api.post('/search', { bbox, ...(start && end ? { start, end } : {}) }, { timeout: 120000 })).data
   },
 
   async getSearch(jobId: string): Promise<SearchJob> {

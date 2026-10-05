@@ -1,0 +1,29 @@
+# Render Blueprint: the backend API (docs/DEPLOYMENT_PLAN.md). Secrets are entered in the
+# Render dashboard (sync: false), never committed.
+services:
+  - type: web
+    name: darksts-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-render.txt
+    startCommand: uvicorn webapp.backend.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: SEARCH_MODE
+        value: worker
+      - key: MONGODB_URI
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: MODAL_TOKEN_ID
+        sync: false
+      - key: MODAL_TOKEN_SECRET
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: GFW_API_TOKEN
+        sync: false
+      - key: AISSTREAM_API_KEY
+        sync: false

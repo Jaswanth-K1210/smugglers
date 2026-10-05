@@ -7,7 +7,7 @@ The backend (Render, step 2) calls it by name and never needs the model itself:
 
     period = modal.Function.from_name("darksts-worker", "search_period")
     call = period.spawn(box, start, end, job_id)       # returns at once
-    status = read_status(job_id)                       # progress, from the shared Dict
+    status = worker.status(job_id)                     # webapp/backend/worker.py: progress Dict
     result = modal.FunctionCall.from_id(call.object_id).get(timeout=0)   # when done
 
 These are plain Modal functions, not public web endpoints: only a caller holding the
@@ -92,13 +92,9 @@ def search_period(box, start, end, job_id):
 
 
 def read_status(job_id):
-    """{status, passes, progress 0..1, stages[]} from the shared Dict; usable from any Modal client."""
-    job = progress.get(f"{job_id}:job") or {"status": "queued"}
-    n = job.get("passes") or 0
-    each = [progress.get(f"{job_id}:{k}") or {"stage": "waiting", "progress": 0.0} for k in range(n)]
-    done = sum(p.get("progress", 0.0) for p in each) / n if n else 0.0
-    return {"status": job.get("status", "queued"), "error": job.get("error"), "passes": n,
-            "passes_found": job.get("found"), "progress": round(done, 2), "stages": [p["stage"] for p in each]}
+    """Progress of a period search; the same reader the backend uses (webapp/backend/worker.py)."""
+    from webapp.backend.worker import status
+    return status(job_id)
 
 
 @app.local_entrypoint()

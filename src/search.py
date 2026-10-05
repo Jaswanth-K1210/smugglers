@@ -25,9 +25,10 @@ import numpy as np
 import pandas as pd
 
 from src import context, dark_sts, fetch_s1, gfw, hunt, match, regional_ais
+from src.limits import (MAX_KM, MAX_PASSES, MAX_PERIOD_DAYS, MIN_KM, box_km,  # noqa: F401  re-exported
+                        validate, validate_period)
 from src.config import DATA
 
-MIN_KM, MAX_KM = 11, 60       # one 1024 px tile ... the free-CPU time budget
 LOOKBACK_DAYS = 12            # Sentinel-1 revisit is ~6 days with S1C + S1D
 MIN_OVERLAP = 0.5
 CACHE = DATA / "search_cache"
@@ -41,29 +42,7 @@ SHIP_CONF, WEAK_CONF = 0.25, 0.15
 CACHE_VERSION = 3             # bump when results change, so stale cached searches are not served
 
 
-MAX_PERIOD_DAYS, MAX_PASSES = 31, 6     # time-period search limits (docs/DEPLOYMENT_PLAN.md §2)
-ARCHIVE_START = pd.Timestamp("2014-10-03")   # first Sentinel-1 IW data on Planetary Computer
 RECUR_M = 300                 # same spot on two passes: likely a fixed structure or a ship at anchor
-
-
-def box_km(box):
-    lon0, lat0, lon1, lat1 = box
-    return ((lon1 - lon0) * 111.32 * math.cos(math.radians((lat0 + lat1) / 2)), (lat1 - lat0) * 110.57)
-
-
-def validate(box):
-    """Raise ValueError with a sentence a user can act on."""
-    if len(box) != 4:
-        raise ValueError("Send the box as [west, south, east, north].")
-    lon0, lat0, lon1, lat1 = map(float, box)
-    if not (-180 <= lon0 < lon1 <= 180 and -85 <= lat0 < lat1 <= 85):
-        raise ValueError("The box corners are out of order or off the map.")
-    w, h = box_km(box)
-    if min(w, h) < MIN_KM:
-        raise ValueError(f"Draw a box at least {MIN_KM} km on each side (this one is {w:.0f} × {h:.0f} km).")
-    if max(w, h) > MAX_KM:
-        raise ValueError(f"Draw a box at most {MAX_KM} km on each side (this one is {w:.0f} × {h:.0f} km).")
-    return lon0, lat0, lon1, lat1
 
 
 def scenes(box, end=None, days=LOOKBACK_DAYS):
@@ -388,24 +367,6 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
     hit.write_text(json.dumps(result))
     progress("Done", 1.0)
     return result
-
-
-def validate_period(start, end, today=None):
-    """(start, end) as Timestamps; ValueError with a sentence a user can act on."""
-    try:
-        a, b = pd.Timestamp(start).normalize(), pd.Timestamp(end).normalize()
-    except (ValueError, TypeError):
-        raise ValueError("Send the dates as YYYY-MM-DD.")
-    today = pd.Timestamp(today or pd.Timestamp.utcnow().tz_localize(None)).normalize()
-    if b < a:
-        raise ValueError("The end date is before the start date.")
-    if b > today:
-        raise ValueError("The end date is in the future.")
-    if a < ARCHIVE_START:
-        raise ValueError(f"Sentinel-1 images start on {ARCHIVE_START:%d %b %Y}; pick a later start date.")
-    if (b - a).days + 1 > MAX_PERIOD_DAYS:
-        raise ValueError(f"Pick a period of at most {MAX_PERIOD_DAYS} days (this one is {(b - a).days + 1}).")
-    return a, b
 
 
 def period_passes(box, start, end, max_passes=MAX_PASSES):

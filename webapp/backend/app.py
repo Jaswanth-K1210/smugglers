@@ -16,7 +16,6 @@ import hmac
 import json
 import os
 import secrets
-import sqlite3
 import time
 from pathlib import Path
 
@@ -24,6 +23,8 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+from webapp.backend import store, worker
 
 ROOT = Path(__file__).resolve().parents[2]
 EVENTS = Path(os.getenv("EVENTS_PATH", ROOT / "outputs" / "events.geojson"))
@@ -53,7 +54,9 @@ TOKEN_TTL = 7 * 24 * 3600
 
 app = FastAPI(title="Dark STS Detection", version="1.0",
               description="Open-data Sentinel-1 + AIS ship-to-ship transfer characterisation")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# Bearer tokens, not cookies, so "*" is safe; set ALLOWED_ORIGINS to the Vercel URL to narrow it.
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=ALLOWED_ORIGINS, allow_methods=["*"], allow_headers=["*"])
 
 _cache = {"mtime": None, "data": None}
 
@@ -115,12 +118,27 @@ def load_events():
     return _cache["data"]
 
 
-def _db():
-    USERS_DB.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(USERS_DB)
-    db.execute("CREATE TABLE IF NOT EXISTS users "
-               "(email TEXT PRIMARY KEY, name TEXT, salt BLOB, hash BLOB)")
-    return db
+_stores = {}
+
+
+def _users():
+    """Accounts: MongoDB when MONGODB_URI is set (Render), else the SQLite file at USERS_DB."""
+    key = "mongo" if os.getenv("MONGODB_URI") else str(USERS_DB)
+    if key not in _stores:
+        _stores[key] = store.open_stores(USERS_DB)
+    return _stores[key][0]
+
+
+_search_store = None
+
+
+def _searches():
+    """Search records (quotas, polling): MongoDB when configured, else memory."""
+    global _search_store
+    if _search_store is None:
+        _search_store = (store.open_stores(USERS_DB)[1] if os.getenv("MONGODB_URI")
+                         else store.MemorySearches())
+    return _search_store
 
 
 def _hash(password: str, salt: bytes) -> bytes:
@@ -134,9 +152,8 @@ def _token(email: str) -> str:
 
 
 def _user(email: str):
-    with _db() as db:
-        row = db.execute("SELECT name, email FROM users WHERE email = ?", (email,)).fetchone()
-    return {"name": row[0], "email": row[1]} if row else None
+    u = _users().get(email)
+    return {"name": u["name"], "email": u["email"]} if u else None
 
 
 def current_user(authorization: str = Header(None)):
@@ -189,9 +206,8 @@ def auth_register(payload: dict, request: Request):
         raise HTTPException(422, "Use a password of at least 8 characters.")
     salt = secrets.token_bytes(16)
     try:
-        with _db() as db:
-            db.execute("INSERT INTO users VALUES (?, ?, ?, ?)", (email, name, salt, _hash(password, salt)))
-    except sqlite3.IntegrityError:
+        _users().add(email, name, salt, _hash(password, salt))
+    except store.DuplicateUser:
         raise HTTPException(409, "An account with this email already exists. Sign in instead.")
     return _session(email)
 
@@ -200,9 +216,8 @@ def auth_register(payload: dict, request: Request):
 def auth_login(payload: dict, request: Request):
     _throttle(request)
     email = str(payload.get("email", "")).strip().lower()
-    with _db() as db:
-        row = db.execute("SELECT salt, hash FROM users WHERE email = ?", (email,)).fetchone()
-    if not row or not hmac.compare_digest(_hash(str(payload.get("password", "")), row[0]), row[1]):
+    u = _users().get(email)
+    if not u or not hmac.compare_digest(_hash(str(payload.get("password", "")), u["salt"]), u["hash"]):
         raise HTTPException(401, "Email or password is incorrect.")
     return _session(email)
 
@@ -333,10 +348,12 @@ from concurrent.futures import ThreadPoolExecutor
 HF_MODEL_REPO = os.getenv("HF_MODEL_REPO")            # e.g. "<user>/darksts-detector"
 SEARCH_WEIGHTS = os.getenv("SEARCH_WEIGHTS", "best.pt")
 _executor = ThreadPoolExecutor(max_workers=1)
-_jobs, _jobs_lock = {}, threading.Lock()
-MAX_JOBS = 500
 MAX_QUEUE = 5                 # searches waiting or running, all users together
-DAILY_SEARCHES = 20           # per account; each costs ~2 CPU-minutes of free credit
+DAILY_SEARCHES = 20           # per account; each costs ~2 CPU-minutes of free credit per pass
+STALE_S = 1800                # a search not finished in 30 min no longer blocks its user
+# local: this server runs the model (the all-in-one Modal app). worker: the Modal worker
+# app "darksts-worker" runs it, and this server only starts and polls (Render).
+SEARCH_MODE = os.getenv("SEARCH_MODE", "local")
 
 
 def search_weights() -> Path:
@@ -350,8 +367,7 @@ def search_weights() -> Path:
 
 
 def _set(job_id, **kw):
-    with _jobs_lock:
-        _jobs[job_id].update(kw)
+    _searches().update(job_id, **kw)
 
 
 def _run_search(job_id, box, weights):
@@ -369,43 +385,82 @@ def _run_search(job_id, box, weights):
         traceback.print_exc()
 
 
+def _period(payload):
+    """(start, end) dates: from the request, or the default recent window."""
+    from src import limits
+    if payload.get("start") or payload.get("end"):
+        return limits.validate_period(payload.get("start"), payload.get("end"))
+    return limits.default_period()
+
+
 @app.post("/api/search")
 def start_search(payload: dict, user: dict = Depends(current_user)):
-    """Start a search over {"bbox": [west, south, east, north]}; poll /api/search/{job_id}."""
-    from src.search import validate
+    """Start a search over {"bbox": [w, s, e, n], "start"?: "YYYY-MM-DD", "end"?: ...}; poll /api/search/{id}."""
+    from src.limits import validate
     try:
         box = validate(payload.get("bbox") or [])
+        start, end = _period(payload) if SEARCH_MODE == "worker" else (None, None)
     except (ValueError, TypeError) as e:
         raise HTTPException(422, str(e) or "Send the box as [west, south, east, north].")
-    weights = search_weights()
+    weights = search_weights() if SEARCH_MODE == "local" else None
+    now = time.time()
+    active = [j for j in _searches().active() if now - j["created"] < STALE_S]
+    if any(j["user"] == user["email"] for j in active):
+        raise HTTPException(429, "You already have a search running. Wait for it to finish.")
+    if len(active) >= MAX_QUEUE:
+        raise HTTPException(503, "The search service is busy. Try again in a few minutes.")
+    if len(_searches().since(user["email"], now - 86400)) >= DAILY_SEARCHES:
+        raise HTTPException(429, f"Daily limit of {DAILY_SEARCHES} searches reached. Try again tomorrow.")
     job_id = uuid.uuid4().hex[:12]
-    with _jobs_lock:
-        active = [j for j in _jobs.values() if j["status"] in ("queued", "running")]
-        if any(j["user"] == user["email"] for j in active):
-            raise HTTPException(429, "You already have a search running. Wait for it to finish.")
-        if len(active) >= MAX_QUEUE:
-            raise HTTPException(503, "The search service is busy. Try again in a few minutes.")
-        today = [j for j in _jobs.values()
-                 if j["user"] == user["email"] and time.time() - j["created"] < 86400]
-        if len(today) >= DAILY_SEARCHES:
-            raise HTTPException(429, f"Daily limit of {DAILY_SEARCHES} searches reached. Try again tomorrow.")
-        ahead = len(active)
-        _jobs[job_id] = {"job_id": job_id, "status": "queued", "bbox": list(box), "progress": 0.0,
-                         "stage": "Waiting for the previous search to finish" if ahead else "Starting",
-                         "queue_position": ahead, "user": user["email"], "created": time.time()}
-        for old in sorted(_jobs, key=lambda k: _jobs[k]["created"])[:-MAX_JOBS]:
-            del _jobs[old]
-    _executor.submit(_run_search, job_id, box, weights)
-    return {"job_id": job_id, "queue_position": ahead}
+    ahead = len(active) if SEARCH_MODE == "local" else 0
+    row = {"job_id": job_id, "status": "queued", "bbox": list(box), "progress": 0.0, "mode": SEARCH_MODE,
+           "stage": "Waiting for the previous search to finish" if ahead else "Starting",
+           "queue_position": ahead, "user": user["email"], "created": now}
+    if SEARCH_MODE == "worker":
+        row.update(period=[str(start), str(end)], status="running")
+        try:
+            row["call_id"] = worker.spawn(box, start, end, job_id)
+        except Exception as e:
+            raise HTTPException(503, f"The search service could not be reached ({type(e).__name__}). "
+                                     "Try again in a minute.")
+        _searches().add(row)
+    else:
+        _searches().add(row)
+        _executor.submit(_run_search, job_id, box, weights)
+    return {"job_id": job_id, "queue_position": ahead, **({"period": row["period"]} if "period" in row else {})}
+
+
+def _worker_status(job):
+    """Poll the Modal worker: progress while running, the period result when done."""
+    try:
+        st = worker.status(job["job_id"])
+        res = worker.result(job["call_id"]) if st["status"] != "error" else None
+    except Exception as e:                           # user errors raised in the worker carry a sentence
+        msg = str(e) if type(e).__name__ in ("ValueError", "LookupError") else \
+            f"The search failed ({type(e).__name__}). Try again in a minute."
+        _set(job["job_id"], status="error", error=msg)
+        return {"job_id": job["job_id"], "status": "error", "error": msg}
+    if st["status"] == "error":
+        _set(job["job_id"], status="error", error=st["error"])
+        return {"job_id": job["job_id"], "status": "error", "error": st["error"]}
+    if res is not None:
+        _set(job["job_id"], status="done", progress=1.0)
+        return {"job_id": job["job_id"], "status": "done", "progress": 1.0, "stage": "Done",
+                "period": job.get("period"), "result": res}
+    n = st["passes"]
+    stage = (f"Searching {n} satellite pass{'es' if n != 1 else ''}" if n else "Finding satellite passes")
+    return {"job_id": job["job_id"], "status": "running", "progress": st["progress"], "stage": stage,
+            "stages": st["stages"], "passes": n, "passes_found": st["passes_found"], "period": job.get("period")}
 
 
 @app.get("/api/search/{job_id}")
 def search_status(job_id: str, user: dict = Depends(current_user)):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-        if not job or job["user"] != user["email"]:
-            raise HTTPException(404, "No such search. It may have expired after a restart.")
-        return {k: v for k, v in job.items() if k != "user"}
+    job = _searches().get(job_id)
+    if not job or job["user"] != user["email"]:
+        raise HTTPException(404, "No such search. It may have expired after a restart.")
+    if job.get("mode") == "worker" and job["status"] == "running":
+        return _worker_status(job)
+    return {k: v for k, v in job.items() if k not in ("user", "call_id")}
 
 
 # ── Live context: AIS positions (aisstream.io) and sanctions news ─────────────

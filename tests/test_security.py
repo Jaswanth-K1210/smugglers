@@ -13,7 +13,7 @@ OMAN = [56.40, 25.10, 56.70, 25.40]
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(backend, "USERS_DB", tmp_path / "users.db")
-    monkeypatch.setattr(backend, "_jobs", {})
+    monkeypatch.setattr(backend, "_search_store", backend.store.MemorySearches())
     c = TestClient(backend.app)
     r = c.post("/api/auth/register", json={"name": "T", "email": "t@example.org", "password": "correct horse"})
     c.headers["Authorization"] = f"Bearer {r.json()['token']}"

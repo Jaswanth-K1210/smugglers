@@ -22,7 +22,7 @@ def test_period_limits(start, end, msg):
 
 def test_period_ok():
     a, b = search.validate_period("2026-09-01", "2026-10-01", today=TODAY)   # 31 days inclusive
-    assert (a, b) == (pd.Timestamp("2026-09-01"), pd.Timestamp("2026-10-01"))
+    assert (str(a), str(b)) == ("2026-09-01", "2026-10-01")
 
 
 def _item(i, cover):

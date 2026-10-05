@@ -1,0 +1,10 @@
+# Backend on Render (SEARCH_MODE=worker): API, accounts, job polling. The model and the
+# image libraries run on Modal (modal_worker.py), so none of them are installed here.
+fastapi
+uvicorn[standard]
+python-multipart
+requests
+python-dotenv
+pandas
+pymongo
+modal

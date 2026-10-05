@@ -227,6 +227,21 @@ def auth_me(user: dict = Depends(current_user)):
     return {"user": user}
 
 
+_STARTED = time.time()
+
+
+def _process_stats():
+    """Uptime and memory, to tell a server that keeps restarting (out of memory) from a slow one."""
+    rss = None
+    try:
+        with open("/proc/self/status") as f:                       # Linux (Render, Modal)
+            rss = next(int(l.split()[1]) // 1024 for l in f if l.startswith("VmRSS:"))
+    except (OSError, StopIteration, ValueError):
+        pass
+    return {"uptime_s": int(time.time() - _STARTED), "rss_mb": rss,
+            "live_ships": len(feeds.ships), "live_statics": len(feeds.statics), "live_tracks": len(feeds.tracks)}
+
+
 @app.get("/api/health")
 def health():
     ev = load_events()
@@ -242,6 +257,7 @@ def health():
         # worker mode: the model runs on Modal, so this server needs no weights of its own
         "search_available": SEARCH_MODE == "worker" or has_weights or bool(os.getenv("HF_MODEL_REPO")),
         "search_mode": SEARCH_MODE,
+        **_process_stats(),
         "liveDetectionAvailable": has_weights,
     }
 

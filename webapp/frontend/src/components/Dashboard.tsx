@@ -124,8 +124,8 @@ export const Dashboard: React.FC = () => {
     const t = setTimeout(async () => {
       try {
         const next = await apiService.getSearch(job.job_id)
-        if (next.stages?.length) setStages(next.stages)              // period search: one live line per pass
-        else if (next.stage) setStages((s) => (s[s.length - 1] === next.stage ? s : [...s, next.stage!]))
+        // period search: the per-pass lines live on the job itself; the running list is for single-pass searches
+        if (!next.stages?.length && next.stage) setStages((s) => (s[s.length - 1] === next.stage ? s : [...s, next.stage!]))
         setJob(next)
         if (next.status === 'done') {
           setPass(0)

@@ -38,6 +38,15 @@ def _setup():
     regional_ais.before_read = ais.reload        # see rows the scheduled Gulf recorder committed
 
 
+def _describe(e):
+    """'HTTP 429 from gateway.api.globalfishingwatch.org' rather than a bare 'HTTPError'."""
+    resp = getattr(e, "response", None)
+    if resp is not None and getattr(resp, "url", None):
+        from urllib.parse import urlparse
+        return f"HTTP {resp.status_code} from {urlparse(resp.url).netloc}"
+    return type(e).__name__
+
+
 def _put(job_id, key, **kw):
     try:
         progress[f"{job_id}:{key}"] = {**kw, "t": time.time()}
@@ -75,7 +84,7 @@ def search_pass(item, box, job_id, index):
         _put(job_id, index, stage=f"{t} UTC: done", progress=1.0, scene=item["id"])
         return out
     except Exception as e:
-        msg = str(e) if isinstance(e, (ValueError, LookupError)) else f"{type(e).__name__}"
+        msg = str(e) if isinstance(e, (ValueError, LookupError)) else _describe(e)
         _put(job_id, index, stage=f"{t} UTC: failed ({msg})", progress=1.0, scene=item["id"], error=True)
         return {"scene": {"id": item["id"], "time": item["properties"]["datetime"]}, "error": msg}
 

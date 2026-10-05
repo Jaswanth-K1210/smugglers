@@ -59,13 +59,29 @@ const Scanner: React.FC<{ job: SearchJob | null; stages: string[] }> = ({ job, s
     <div className="h-1 bg-rule">
       <div className="h-full bg-signal transition-[width] duration-500" style={{ width: `${Math.max(4, (job?.progress ?? 0) * 100)}%` }} />
     </div>
-    <ol className="space-y-0.5 text-[11px] text-ink-3">
-      {stages.map((s, i) => (
-        <li key={s} className={i === stages.length - 1 ? 'text-ink-2' : ''}>
-          <span className={i === stages.length - 1 ? 'text-signal' : 'text-ink-3'}>{i === stages.length - 1 ? '>' : '✓'}</span> {s}
-        </li>
-      ))}
-    </ol>
+    {job?.stages?.length ? (
+      // period search: one line per pass with its own state (index keys: many lines read "waiting")
+      <ol className="space-y-0.5 text-[11px] text-ink-3" aria-label="Passes">
+        {job.stages.map((s, i) => {
+          const state = / failed/.test(s) ? 'failed' : /: (done|Done)$/.test(s) ? 'done' : s === 'waiting' ? 'waiting' : 'running'
+          const mark = { failed: '✗', done: '✓', waiting: '·', running: '>' }[state]
+          const tone = { failed: 'text-unmatched', done: 'text-ink-3', waiting: 'text-ink-3', running: 'text-signal' }[state]
+          return (
+            <li key={i} className={state === 'running' ? 'text-ink-2' : ''}>
+              <span className={tone}>{mark}</span> {s === 'waiting' ? `Pass ${i + 1}: waiting for a free worker` : s}
+            </li>
+          )
+        })}
+      </ol>
+    ) : (
+      <ol className="space-y-0.5 text-[11px] text-ink-3">
+        {stages.map((s, i) => (
+          <li key={i} className={i === stages.length - 1 ? 'text-ink-2' : ''}>
+            <span className={i === stages.length - 1 ? 'text-signal' : 'text-ink-3'}>{i === stages.length - 1 ? '>' : '✓'}</span> {s}
+          </li>
+        ))}
+      </ol>
+    )}
   </div>
 )
 

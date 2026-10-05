@@ -42,7 +42,15 @@ regional: dict = {}    # "hn:<id>" -> normalised row
 regional_state = {"ok": None, "at": None, "error": None, "count": 0, "recorded": 0}
 REGIONAL_EVERY_S = 5 * 60
 statics: dict = {}     # MMSI -> type, IMO, call sign, size, destination (sent every ~6 min)
-STATIC_TTL = 7 * 24 * 3600   # type / IMO / size barely change; destination and ETA refresh on the next report
+STATIC_TTL = float(os.getenv("LIVE_STATIC_TTL_S", 24 * 3600))   # type / IMO / size barely change
+# Memory caps. Each ship costs ~4.4 KB (position + details + track), measured on Render; the
+# whole-world feed reaches 60-100k ships an hour, which overruns a 512 MB server. Past a cap
+# the oldest entries go first. Defaults fit Render's free 512 MB (~360 MB at the caps); the
+# Modal site (4 GB) raises them through the same variables.
+MAX_SHIPS = int(os.getenv("LIVE_MAX_SHIPS", 50_000))
+MAX_STATICS = int(os.getenv("LIVE_MAX_STATICS", 60_000))
+PRUNE_EVERY_S = 60
+_last_prune = {"t": 0.0}
 STATIC_PATH = Path(os.getenv("AIS_STATIC_PATH", Path(__file__).resolve().parents[2] / "data" / "ais_static.json"))
 POSITIONS_PATH = STATIC_PATH.with_name("ais_positions.json")
 SAVE_EVERY_S = 5 * 60
@@ -138,6 +146,8 @@ def _store(msg: dict, now: float):
         "t": now,
     }
     _track(mmsi, lat, lon, now)
+    if now - _last_prune["t"] >= PRUNE_EVERY_S:
+        prune(now)
 
 
 def _track(mmsi, lat, lon, now):
@@ -428,17 +438,33 @@ async def run_aisstream(key: str):
         await asyncio.sleep(10)
 
 
+def prune(now=None):
+    """Drop stale positions and details, then hold both under their caps (oldest first).
+
+    Runs from the feed every PRUNE_EVERY_S, not only when someone opens the map, so memory
+    cannot grow while nobody is looking."""
+    now = now or time.time()
+    _last_prune["t"] = now
+    for k in [k for k, v in ships.items() if now - v["t"] > STALE_S]:
+        del ships[k]
+        tracks.pop(k, None)
+    for k in [k for k, v in statics.items() if now - v["t"] > STATIC_TTL]:
+        del statics[k]
+    for store, cap, also in ((ships, MAX_SHIPS, tracks), (statics, MAX_STATICS, None)):
+        if len(store) > cap:
+            for k in sorted(store, key=lambda k: store[k]["t"])[:len(store) - cap]:
+                del store[k]
+                if also is not None:
+                    also.pop(k, None)
+
+
 def live_vessels(bbox=None, now=None):
     """Fresh positions inside [west, south, east, north]; (ships, total in view).
 
     A world view can hold 100k ships. Past MAX_VESSELS we keep one ship per grid
     cell so the whole view stays covered, instead of the first N in dict order."""
     now = now or time.time()
-    for k in [k for k, v in ships.items() if now - v["t"] > STALE_S]:
-        del ships[k]
-        tracks.pop(k, None)
-    for k in [k for k, v in statics.items() if now - v["t"] > STATIC_TTL]:
-        del statics[k]
+    prune(now)
     w, s_, e, n = bbox or (-180, -90, 180, 90)
     inside = [v for v in ships.values() if w <= v["lon"] <= e and s_ <= v["lat"] <= n]
     total = len(inside)

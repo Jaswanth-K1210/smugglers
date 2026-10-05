@@ -43,6 +43,8 @@ image = (modal.Image.debian_slim(python_version="3.11")
                "HF_HOME": "/app/data/hf",
                "YOLO_CONFIG_DIR": "/app/data/ultralytics",
                "GFW_RETRY_WAIT": "5",
+               # 4 GB here, so the live map may keep more of the world than Render's 512 MB can
+               "LIVE_MAX_SHIPS": "150000", "LIVE_MAX_STATICS": "200000", "LIVE_STATIC_TTL_S": str(7 * 24 * 3600),
                # the scheduled job below owns the Gulf AIS recording; the web container only reads it
                "REGIONAL_RECORD": "0",
                "REGIONAL_AIS_DIR": "/app/ais",

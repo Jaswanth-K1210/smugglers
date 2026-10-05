@@ -79,3 +79,23 @@ def test_repeated_reports_keep_the_newest_and_count_ships(monkeypatch):
     monkeypatch.setattr(feeds.requests, "get", lambda *a, **k: Resp(rows))
     out = feeds.vesselapi_fill(MUMBAI, now=2_000_000_000)
     assert out["added"] == 2 and feeds.vesselapi_rows["9"]["lat"] == 19.05
+
+
+def test_live_memory_is_capped_oldest_first(monkeypatch):
+    monkeypatch.setattr(feeds, "MAX_SHIPS", 3)
+    monkeypatch.setattr(feeds, "MAX_STATICS", 2)
+    saved = (dict(feeds.ships), dict(feeds.statics), dict(feeds.tracks))
+    try:
+        feeds.ships.clear(); feeds.statics.clear(); feeds.tracks.clear()
+        now = 1_000_000.0
+        for i in range(5):
+            feeds.ships[i] = {"t": now - 100 + i, "lat": 0, "lon": 0}
+            feeds.tracks[i] = [0]
+            feeds.statics[i] = {"t": now - 100 + i}
+        feeds.ships[99] = {"t": now - feeds.STALE_S - 1, "lat": 0, "lon": 0}     # stale: always dropped
+        feeds.prune(now)
+        assert sorted(feeds.ships) == [2, 3, 4] and sorted(feeds.tracks) == [2, 3, 4]
+        assert sorted(feeds.statics) == [3, 4]
+    finally:
+        feeds.ships.clear(); feeds.statics.clear(); feeds.tracks.clear()
+        feeds.ships.update(saved[0]); feeds.statics.update(saved[1]); feeds.tracks.update(saved[2])

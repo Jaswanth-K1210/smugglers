@@ -8,6 +8,13 @@ import { Panel } from './Panel'
 // Mirrors src/search.py: one 1024 px tile at minimum, the free-CPU budget at maximum.
 const MIN_KM = 11
 const MAX_KM = 60
+/** A `km` × `km` box around the centre of `b`: the fix offered for a box drawn too large. */
+export const shrinkBox = (b: BBox, km = 50): BBox => {
+  const lat = (b[1] + b[3]) / 2, lon = (b[0] + b[2]) / 2
+  const dLat = km / 2 / 110.57, dLon = km / 2 / (111.32 * Math.cos(lat * Math.PI / 180))
+  return [lon - dLon, lat - dLat, lon + dLon, lat + dLat]
+}
+
 export const boxKm = (b: BBox) => [
   (b[2] - b[0]) * 111.32 * Math.cos(((b[1] + b[3]) / 2) * Math.PI / 180),
   (b[3] - b[1]) * 110.57,
@@ -118,11 +125,13 @@ export const AreaSearch: React.FC<{
   periodSearch: boolean             // backend runs time-period searches (Render + Modal worker)
   pass: number
   onPass: (i: number) => void
-}> = ({ drawing, onDraw, box, onClear, onGo, job, stages, openShip, onShip, period, onPeriod, periodSearch, pass, onPass }) => {
+  onBox: (b: BBox) => void
+}> = ({ drawing, onDraw, box, onClear, onGo, job, stages, openShip, onShip, period, onPeriod, periodSearch, pass, onPass, onBox }) => {
   const [w, h] = box ? boxKm(box) : [0, 0]
   const sizeError = box && (Math.min(w, h) < MIN_KM || Math.max(w, h) > MAX_KM)
-    ? `Boxes must be ${MIN_KM}–${MAX_KM} km on each side. This one is ${w.toFixed(0)} × ${h.toFixed(0)} km.`
+    ? `Boxes must be ${MIN_KM}–${MAX_KM} km on each side (one satellite image area). This one is ${w.toFixed(0)} × ${h.toFixed(0)} km.`
     : null
+  const tooBig = !!box && Math.max(w, h) > MAX_KM
   const busy = job?.status === 'queued' || job?.status === 'running'
   const full = job?.status === 'done' ? job.result : undefined
   const passes = passesOf(full)
@@ -158,6 +167,11 @@ export const AreaSearch: React.FC<{
             {box[1].toFixed(2)}°, {box[0].toFixed(2)}° to {box[3].toFixed(2)}°, {box[2].toFixed(2)}°
           </p>
           {sizeError && <p className="text-xs text-partial">{sizeError}</p>}
+          {tooBig && box && (
+            <button onClick={() => onBox(shrinkBox(box))} className="btn-quiet w-full">
+              Use a 50 × 50 km box at its centre
+            </button>
+          )}
           {periodSearch && (
             <fieldset className="space-y-1">
               <legend className="text-[10px] uppercase tracking-wider text-ink-3">Time period (UTC)</legend>

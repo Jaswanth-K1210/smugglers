@@ -63,7 +63,8 @@ export const Dashboard: React.FC = () => {
   const onVesselLoaded = useCallback((v: VesselDetail) => setPicked(v), [])
   const [showTrack, setShowTrack] = useState(false)
   const [mapStyle, setMapStyle] = useState<MapStyle>(() => {
-    try { return localStorage.getItem('sts_map_style') === 'dark' ? 'dark' : 'light' } catch { return 'light' }
+    // dark by default; a user who picked light keeps it
+    try { return localStorage.getItem('sts_map_style') === 'light' ? 'light' : 'dark' } catch { return 'dark' }
   })
   const switchMap = () => setMapStyle((m) => {
     const next = m === 'light' ? 'dark' : 'light'
@@ -251,7 +252,7 @@ export const Dashboard: React.FC = () => {
           <VesselApiFill bounds={bounds} feed={feed} onFilled={() => bounds && apiService.getLive(bounds).then(setFeed).catch(() => {})} />
           <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />
           <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
-            job={job} stages={stages} openShip={openShip} onShip={setOpenShip}
+            job={job} stages={stages} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
             period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
           <FilterPanel />
         </aside>

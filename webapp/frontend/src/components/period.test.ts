@@ -36,3 +36,15 @@ describe('passes of a search result', () => {
     expect(ps.map(isFailedPass)).toEqual([false, true])
   })
 })
+
+describe('box drawn too large', () => {
+  it('shrinks to a 50 km box at its centre, inside the limits', async () => {
+    const { shrinkBox, boxKm } = await import('./AreaSearch')
+    const huge: [number, number, number, number] = [50, 10, 70, 22]            // ~2,100 x 1,300 km
+    const [w, h] = boxKm(shrinkBox(huge))
+    expect(Math.round(w)).toBe(50)
+    expect(Math.round(h)).toBe(50)
+    const b = shrinkBox(huge)
+    expect(((b[0] + b[2]) / 2).toFixed(6)).toBe('60.000000')
+  })
+})

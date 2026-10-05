@@ -25,8 +25,10 @@ if modal.is_local():                          # deploy time only: read .env, kee
     import os
     if os.getenv("PC_SDK_SUBSCRIPTION_KEY"):  # free Planetary Computer key: higher download limits
         values["PC_SDK_SUBSCRIPTION_KEY"] = os.environ["PC_SDK_SUBSCRIPTION_KEY"]
-    if os.getenv("AISSTREAM_API_KEY"):        # live ship dots on the map; optional
-        values["AISSTREAM_API_KEY"] = os.environ["AISSTREAM_API_KEY"]
+    for key in ("AISSTREAM_API_KEY",            # live ship dots on the map; optional
+                "OPENWATERS_TOKEN"):            # Open Waters shore AIS: higher area cap; optional
+        if os.getenv(key):
+            values[key] = os.environ[key]
     values["GFW_API_TOKEN"] = GFW_API_TOKEN
     # no AUTH_SECRET here: the app makes a random one on the volume and keeps it
 
@@ -75,7 +77,8 @@ def web():
     return api
 
 
-@app.function(image=image, volumes={"/app/ais": ais}, schedule=modal.Period(minutes=5), timeout=120)
+@app.function(image=image, volumes={"/app/ais": ais}, schedule=modal.Period(minutes=5), timeout=120,
+              secrets=[modal.Secret.from_dict(values)])     # OPENWATERS_TOKEN for the Gulf snapshot
 def record_gulf_ais():
     """Record the Gulf AIS snapshot every 5 min, even while the website sleeps (scale to zero).
 

@@ -1,6 +1,6 @@
 """End-to-end check of the deployed site: website, API, model, outside data sources.
 
-    python3 scripts/check_live.py [base_url]
+    python3 scripts/check_live.py [base_url] [--api]     # --api: backend only (Render)
 
 Creates one throwaway account and runs one real search (~3 min). Prints PASS /
 FAIL per check and exits non-zero if any check fails.
@@ -12,7 +12,9 @@ import time
 
 import requests
 
-B = (sys.argv[1] if len(sys.argv) > 1 else "https://jaswanth-k1210--darksts-web.modal.run").rstrip("/")
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+B = (ARGS[0] if ARGS else "https://jaswanth-k1210--darksts-web.modal.run").rstrip("/")
+API_ONLY = "--api" in sys.argv          # Render backend: the website is on Vercel, not here
 BOX = [56.35, 25.05, 56.65, 25.35]              # Fujairah anchorage, ~30 x 33 km: always busy
 results = []
 
@@ -27,10 +29,11 @@ def main():
     h = requests.get(f"{B}/api/health", timeout=180).json()
     check("server up, model available", h.get("search_available") is True, f"{time.time() - t:.0f}s, {h.get('status')}")
 
-    page = requests.get(B + "/", timeout=60)
-    check("website served", page.ok and "<!doctype html" in page.text.lower())
-    js = re.search(r'src="(/assets/[^"]+\.js)"', page.text)
-    check("website script loads", bool(js) and requests.get(B + js.group(1), timeout=60).ok)
+    if not API_ONLY:
+        page = requests.get(B + "/", timeout=60)
+        check("website served", page.ok and "<!doctype html" in page.text.lower())
+        js = re.search(r'src="(/assets/[^"]+\.js)"', page.text)
+        check("website script loads", bool(js) and requests.get(B + js.group(1), timeout=60).ok)
 
     probe = requests.get(B + "/..%2F..%2F..%2Fdata%2Fusers.db", timeout=60)
     check("private files not served", "SQLite" not in probe.text and "CREATE TABLE" not in probe.text)

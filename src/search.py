@@ -369,6 +369,28 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
     return result
 
 
+def detect_upload(data, weights):
+    """The website's "Run detection": the detector on one uploaded image. ValueError if unreadable."""
+    import io
+    import time
+    from PIL import Image
+    from ultralytics import YOLO
+    t0 = time.time()
+    Image.MAX_IMAGE_PIXELS = 50_000_000             # refuse decompression bombs
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        raise ValueError("That file is not an image we can read (use PNG, JPEG or TIFF).")
+    res = YOLO(str(weights)).predict(np.array(img), conf=SHIP_CONF, verbose=False)[0]
+    names = {0: "vessel", 1: "sts"}
+    detections = [{"cls": names.get(int(b.cls[0]), str(int(b.cls[0]))), "conf": round(float(b.conf[0]), 3),
+                   "box": [round(v, 1) for v in b.xyxy[0].tolist()]} for b in res.boxes]
+    return {"detections": detections, "image_size": list(img.size),
+            "vessels_count": sum(d["cls"] == "vessel" for d in detections),
+            "sts_count": sum(d["cls"] == "sts" for d in detections),
+            "processing_time": round(time.time() - t0, 3)}
+
+
 def merge_cells(parts, cores):
     """One pass result from its cells (src.plan): each cell keeps only the ships and pairs inside its
     own core, and the cores tile the box, so a hull searched by two overlapping cells counts once."""

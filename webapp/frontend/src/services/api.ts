@@ -334,6 +334,7 @@ export const apiService = {
     const formData = new FormData()
     formData.append('file', file)
     const response = await api.post('/detect', formData, {
+      timeout: 120000,              // the detector may be waking up on Modal
       headers: { 'Content-Type': 'multipart/form-data' }
     })
     return response.data

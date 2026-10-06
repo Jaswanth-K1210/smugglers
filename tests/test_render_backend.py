@@ -136,3 +136,20 @@ def test_health_says_search_is_available_in_worker_mode(monkeypatch):
     monkeypatch.delenv("HF_MODEL_REPO", raising=False)
     h = TestClient(backend.app).get("/api/health").json()
     assert h["search_available"] is True and h["search_mode"] == "worker"
+
+
+def test_upload_runs_on_the_worker_and_billing_stop_is_explained(worker_mode, monkeypatch):
+    c = _signed_in(TestClient(backend.app))
+    monkeypatch.setattr(backend.worker, "detect", lambda data: {"vessels_count": len(data), "sts_count": 0})
+    r = c.post("/api/detect", files={"file": ("t.png", b"abc", "image/png")})
+    assert r.status_code == 200 and r.json()["vessels_count"] == 3
+    assert c.get("/api/health").json()["live_detection"] is True
+
+    def refused(*a):
+        raise RuntimeError(next(msgs))
+    msgs = iter(["Function call failed: workspace billing cycle spend limit reached", "workspace ac-1 is disabled"])
+    monkeypatch.setattr(backend.worker, "detect", refused)
+    monkeypatch.setattr(backend.worker, "spawn", refused)
+    for r in (c.post("/api/detect", files={"file": ("t.png", b"abc", "image/png")}),
+              c.post("/api/search", json={"bbox": BOX})):
+        assert r.status_code == 503 and "cloud credit" in r.json()["detail"]

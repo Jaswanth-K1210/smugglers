@@ -41,6 +41,12 @@ const EstimateLine: React.FC<{ est: { data?: SearchEstimate; error?: string; loa
   if (est.error) return <p className="text-xs text-partial">{est.error}</p>
   const e = est.data
   if (!e) return null
+  if (e.over_limit) return (     // counting stops at the ceiling, so the numbers would be partial
+    <div className="space-y-1 border border-rule px-2 py-1.5 text-[11px] leading-snug">
+      <p className="text-ink">More than {e.max_units} pieces of work{e.cells > 1 ? ` (${e.cells} areas of up to 50 km)` : ''}.</p>
+      <p className="text-partial">That is over the limit for one search: pick a shorter period or a smaller area.</p>
+    </div>
+  )
   return (
     <div className="space-y-1 border border-rule px-2 py-1.5 text-[11px] leading-snug">
       <p className="text-ink">
@@ -49,11 +55,11 @@ const EstimateLine: React.FC<{ est: { data?: SearchEstimate; error?: string; loa
       </p>
       <p className="text-ink-2">About {e.minutes < 2 ? '2 minutes' : e.minutes < 90 ? `${e.minutes} minutes` : `${(e.minutes / 60).toFixed(1)} hours`},
         ≈ ${e.usd.toFixed(2)} of free cloud credit.</p>
-      {e.over_limit && <p className="text-partial">More than the {e.max_units}-piece limit for one search: pick a shorter period or a smaller area.</p>}
-      {!e.over_limit && e.over_daily && <p className="text-partial">You have {e.daily_units_left} pieces left today: pick a shorter period or a smaller area.</p>}
+      {e.over_daily && <p className="text-partial">You have {e.daily_units_left} pieces left today: pick a shorter period or a smaller area.</p>}
     </div>
   )
 }
+
 const day = (t: string) => new Date(t).toUTCString().slice(5, 22)
 
 const CATEGORY: Record<string, { label: string; color: string }> = {
@@ -189,7 +195,7 @@ export const AreaSearch: React.FC<{
     setEst({ loading: true })
     const t = setTimeout(() => apiService.estimateSearch(box, period[0], period[1])
       .then((data) => live && setEst({ data }))
-      .catch((e) => live && setEst({ error: e?.response?.data?.detail ?? 'Could not count the passes. Try again in a minute.' })), 600)
+      .catch((e) => live && setEst({ error: e instanceof Error ? e.message : 'Could not count the passes. Try again in a minute.' })), 600)
     return () => { live = false; clearTimeout(t) }
   }, [periodSearch, boxKey, period[0], period[1], !!sizeError, !!dateError, busy, !!full])
   const estBlocks = periodSearch && (!est.data || est.data.over_limit || est.data.over_daily)

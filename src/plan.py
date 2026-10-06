@@ -116,23 +116,41 @@ def make_plan(box, start, end, items=None):
     """{passes: [{item, units: [(slice, core)]}], passes_found, cells, units, estimate}, newest first.
 
     Each cell goes to the slice of the pass that covers it best, if that covers at least MIN_COVER,
-    so no cell is searched twice in one pass. Raises LookupError if nothing covers."""
+    so no cell is searched twice in one pass. Counting stops once the search is over MAX_UNITS
+    (a continent-sized box or a period of years would otherwise take minutes just to count).
+    Raises LookupError if nothing covers."""
+    from shapely.geometry import box as rect, shape
     grid = cells(box)
+    rects = [rect(*c) for c in grid]
     items = stac_search(start, end, box, pages=20) if items is None else items
-    passes = []
+    passes, n, over = [], 0, False
     for group in passes_of(items):
-        units = []
-        for core in grid:
-            cover, best = max(((overlap(it, core), k) for k, it in enumerate(group)))
-            if cover >= MIN_COVER:   # ponytail: one slice per cell; a cell split 60/40 between slices
-                units.append((group[best], core))   # loses its 40 %, mosaic the slices if that matters
+        best = {}                                    # cell index -> (cover, slice)
+        for it in group:
+            if not it.get("geometry"):
+                hits = [(k, overlap(it, c)) for k, c in enumerate(grid)]
+            else:
+                foot = shape(it["geometry"])
+                x0, y0, x1, y1 = foot.bounds
+                hits = [(k, foot.intersection(r).area / r.area) for k, (c, r) in enumerate(zip(grid, rects))
+                        if c[0] < x1 and c[2] > x0 and c[1] < y1 and c[3] > y0]   # only cells under the strip
+            for k, cover in hits:
+                if cover > best.get(k, (0, None))[0]:
+                    best[k] = (cover, it)
+        # ponytail: one slice per cell; a cell split 60/40 between slices loses its 40 %, mosaic if that matters
+        units = [(it, grid[k]) for k, (cover, it) in sorted(best.items()) if cover >= MIN_COVER]
         if units:
             passes.append({"item": group[0], "units": units})
+            n += len(units)
+        if n > MAX_UNITS:
+            over = True
+            break
     if not passes:
         raise LookupError("No Sentinel-1 pass covered this area in that period. Try a longer period "
                           "or an area further from the coast.")
-    n = sum(len(p["units"]) for p in passes)
-    return {"passes": passes, "passes_found": len(passes), "cells": len(grid), "units": n, "estimate": estimate(n)}
+    est = estimate(n)
+    est["over_limit"] = est["over_limit"] or over
+    return {"passes": passes, "passes_found": len(passes), "cells": len(grid), "units": n, "estimate": est}
 
 
 def summary(plan):

@@ -10,6 +10,7 @@ CPU. YOLO nano at 1024px is ~1-2 s on two vCPUs, which is what makes a demo
 interactive instead of a slideshow. It is optional: if no weights ship with the
 image, the endpoint reports that plainly instead of failing at import.
 """
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -253,12 +254,12 @@ def health():
         "events": count,
         "eventCount": count,
         "events_file": EVENTS.name if EVENTS.exists() else None,
-        "live_detection": has_weights,
+        "live_detection": SEARCH_MODE == "worker" or has_weights,
         # worker mode: the model runs on Modal, so this server needs no weights of its own
         "search_available": SEARCH_MODE == "worker" or has_weights or bool(os.getenv("HF_MODEL_REPO")),
         "search_mode": SEARCH_MODE,
         **_process_stats(),
-        "liveDetectionAvailable": has_weights,
+        "liveDetectionAvailable": SEARCH_MODE == "worker" or has_weights,
     }
 
 
@@ -320,39 +321,21 @@ MAX_UPLOAD = 10 * 1024 * 1024
 
 @app.post("/api/detect")
 async def detect(file: UploadFile = File(...), _user: dict = Depends(current_user)):
-    """Run the detector on one uploaded tile, on CPU."""
-    weights = search_weights()                       # 503 with a reason when none
-    import io
-    import time
-    import numpy as np
-    from PIL import Image
-
-    t0 = time.time()
+    """Run the detector on one uploaded tile: here (all-in-one app) or on the Modal worker (Render)."""
     data = await file.read(MAX_UPLOAD + 1)
     if len(data) > MAX_UPLOAD:
         raise HTTPException(413, "Upload an image of at most 10 MB.")
-    Image.MAX_IMAGE_PIXELS = 50_000_000             # refuse decompression bombs
     try:
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-    except Exception:
-        raise HTTPException(422, "That file is not an image we can read (use PNG, JPEG or TIFF).")
-    from ultralytics import YOLO
-    res = YOLO(str(weights)).predict(np.array(img), conf=0.25, verbose=False)[0]
-    names = {0: "vessel", 1: "sts"}
-    detections = [{
-        "cls": names.get(int(b.cls[0]), str(int(b.cls[0]))),
-        "conf": round(float(b.conf[0]), 3),
-        "box": [round(v, 1) for v in b.xyxy[0].tolist()],
-    } for b in res.boxes]
-    vessels_count = sum(1 for d in detections if d["cls"] == "vessel")
-    sts_count = sum(1 for d in detections if d["cls"] == "sts")
-    return {
-        "detections": detections,
-        "image_size": list(img.size),
-        "vessels_count": vessels_count,
-        "sts_count": sts_count,
-        "processing_time": round(time.time() - t0, 3),
-    }
+        if SEARCH_MODE == "worker":
+            return await asyncio.to_thread(worker.detect, data)
+        from src.search import detect_upload
+        return await asyncio.to_thread(detect_upload, data, search_weights())
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, _service_error(e))
 
 
 # ---- area search: draw a box, get ships and reasons ------------------------
@@ -383,6 +366,14 @@ def search_weights() -> Path:
         from huggingface_hub import hf_hub_download
         return Path(hf_hub_download(HF_MODEL_REPO, SEARCH_WEIGHTS, token=os.getenv("HF_TOKEN")))
     raise HTTPException(503, "No detector weights in this deployment (set HF_MODEL_REPO).")
+
+
+def _service_error(e):
+    """A sentence for a failed call to the search service (Modal), never a stack trace."""
+    if any(w in str(e).lower() for w in ("spend limit", "workspace", "billing")):   # Modal refusing on cost
+        return ("The search service has used its cloud credit for this billing period, so it cannot "
+                "run the detector until the limit is raised or the period resets.")
+    return f"The search service could not be reached ({type(e).__name__}). Try again in a minute."
 
 
 def _set(job_id, **kw):
@@ -484,8 +475,7 @@ def start_search(payload: dict, user: dict = Depends(current_user)):
         try:
             row["call_id"] = worker.spawn(box, start, end, job_id)
         except Exception as e:
-            raise HTTPException(503, f"The search service could not be reached ({type(e).__name__}). "
-                                     "Try again in a minute.")
+            raise HTTPException(503, _service_error(e))
         _searches().add(row)
     else:
         _searches().add(row)
@@ -530,7 +520,6 @@ def search_status(job_id: str, user: dict = Depends(current_user)):
 
 
 # ── Live context: AIS positions (aisstream.io) and sanctions news ─────────────
-import asyncio
 from webapp.backend import feeds
 
 

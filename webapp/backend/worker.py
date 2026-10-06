@@ -43,6 +43,12 @@ def status(job_id):
             "passes_found": job.get("found"), "units": len(units), "progress": round(done, 2), "stages": stages}
 
 
+def detect(data):
+    """The website's tile upload, run on the worker (this server has no model)."""
+    import modal
+    return modal.Function.from_name(APP, "detect_tile").remote(data)
+
+
 def result(call_id):
     """The finished result, or None while the call is still running. Raises if the call failed."""
     import modal

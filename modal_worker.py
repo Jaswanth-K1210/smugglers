@@ -54,18 +54,32 @@ def _put(job_id, key, **kw):
         pass                                     # progress is a convenience; never fail a search on it
 
 
+def _weights():
+    from pathlib import Path
+    weights = Path("/models/best.pt")             # uploaded straight from Colab (scripts/upload_model.py)
+    if not weights.exists():                      # fallback: the Hugging Face model repo
+        from huggingface_hub import hf_hub_download
+        weights = Path(hf_hub_download(MODEL_REPO, "best.pt", cache_dir="/cache/hf"))
+    return weights
+
+
+@app.function(image=image, cpu=2, memory=4096, timeout=300, volumes={"/cache": cache, "/models": models},
+              max_containers=2, scaledown_window=120)
+def detect_tile(data: bytes):
+    """The website's "Run detection" on one uploaded image (the Render backend has no model)."""
+    _setup()
+    from src import search
+    return search.detect_upload(data, _weights())
+
+
 @app.function(image=image, cpu=2, memory=4096, timeout=900, secrets=[modal.Secret.from_dict(values)],
               volumes={"/cache": cache, "/app/ais": ais, "/models": models}, max_containers=PARALLEL,
               scaledown_window=300)
 def search_pass(item, box, job_id, index):
     """One Sentinel-1 pass of a period search; errors come back as a value, not an exception."""
     _setup()
-    from pathlib import Path
     from src import search
-    weights = Path("/models/best.pt")             # uploaded straight from Colab (scripts/upload_model.py)
-    if not weights.exists():                      # fallback: the Hugging Face model repo
-        from huggingface_hub import hf_hub_download
-        weights = hf_hub_download(MODEL_REPO, "best.pt", cache_dir="/cache/hf")
+    weights = _weights()
     t = item["properties"]["datetime"][:16].replace("T", " ")
     _put(job_id, index, stage=f"{t} UTC: starting", progress=0.0, scene=item["id"])
     try:

@@ -13,7 +13,7 @@ const gapTone = (h: number | null) => (h ?? 0) >= 72 ? 'border-unmatched/50 bg-u
 
 export const StraitPanel: React.FC<{ className?: string; onShip: (name: string) => void }> = ({ className, onShip }) => {
   const [hours, setHours] = useState(48)
-  const [sort, setSort] = useState<'gap' | 'new'>('gap')
+  const [sort, setSort] = useState<'gap' | 'new'>('new')   // newest first by default
   const [data, setData] = useState<{ crossings: StraitCrossing[]; source: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 

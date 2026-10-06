@@ -61,23 +61,28 @@ const CATEGORY: Record<string, { label: string; color: string }> = {
   AIS_NOT_AVAILABLE: { label: 'AIS not available', color: '#838383' },
 }
 
-const Scanner: React.FC<{ job: SearchJob | null; stages: string[] }> = ({ job, stages }) => (
-  <div className="space-y-3" role="status" aria-live="polite">
-    <div className="flex items-center gap-3">
-      <div className="radar h-14 w-14 shrink-0 rounded-full border border-signal/40" aria-hidden="true" />
-      <div className="min-w-0">
-        <p className="text-[11px] uppercase tracking-wider text-signal">
-          {job?.status === 'queued' && job.queue_position ? `Queued, ${job.queue_position} ahead` : 'Scanning'}
-        </p>
-        <p className="mt-1 text-xs leading-snug text-ink">{job?.stage || 'Sending the box'}</p>
+/** Loading over the map while a search runs: see-through, so the map stays visible and usable. */
+export const ScanOverlay: React.FC<{ job: SearchJob | null }> = ({ job }) => (
+  <div className="pointer-events-none absolute inset-0 z-[450] flex items-center justify-center bg-paper/25" role="status" aria-live="polite">
+    <div className="flex flex-col items-center gap-3 px-6 py-4 text-center">
+      <div className="radar h-20 w-20 rounded-full border border-signal/50" aria-hidden="true" />
+      <p className="text-[11px] uppercase tracking-wider text-signal drop-shadow">
+        {job?.status === 'queued' && job.queue_position ? `Queued, ${job.queue_position} ahead` : 'Scanning'} · {Math.round((job?.progress ?? 0) * 100)}%
+      </p>
+      <p className="max-w-xs text-xs text-ink drop-shadow">{job?.stage || 'Sending the box'}</p>
+      <div className="h-1 w-56 bg-rule/60">
+        <div className="h-full bg-signal transition-[width] duration-500" style={{ width: `${Math.max(4, (job?.progress ?? 0) * 100)}%` }} />
       </div>
     </div>
-    <div className="h-1 bg-rule">
-      <div className="h-full bg-signal transition-[width] duration-500" style={{ width: `${Math.max(4, (job?.progress ?? 0) * 100)}%` }} />
-    </div>
+  </div>
+)
+
+/** The search log, shown below the map: one line per pass (period search) or per step. */
+export const SearchLog: React.FC<{ job: SearchJob | null; stages: string[] }> = ({ job, stages }) => (
+  <Panel title="Search log" right={job && <span className="text-[10px] uppercase text-ink-3">{job.status}</span>} bodyClassName="p-3">
     {job?.stages?.length ? (
       // period search: one line per pass with its own state (index keys: many lines read "waiting")
-      <ol className="space-y-0.5 text-[11px] text-ink-3" aria-label="Passes">
+      <ol className="max-h-64 space-y-0.5 overflow-y-auto font-mono text-[11px] text-ink-3" aria-label="Passes">
         {job.stages.map((s, i) => {
           const state = / failed/.test(s) ? 'failed' : /: (done|Done)$/.test(s) || /(\d+) of \1 areas done$/.test(s) ? 'done'
             : s === 'waiting' || /: waiting$/.test(s) ? 'waiting' : 'running'
@@ -91,7 +96,7 @@ const Scanner: React.FC<{ job: SearchJob | null; stages: string[] }> = ({ job, s
         })}
       </ol>
     ) : (
-      <ol className="space-y-0.5 text-[11px] text-ink-3">
+      <ol className="max-h-64 space-y-0.5 overflow-y-auto font-mono text-[11px] text-ink-3">
         {stages.map((s, i) => (
           <li key={i} className={i === stages.length - 1 ? 'text-ink-2' : ''}>
             <span className={i === stages.length - 1 ? 'text-signal' : 'text-ink-3'}>{i === stages.length - 1 ? '>' : '✓'}</span> {s}
@@ -99,7 +104,8 @@ const Scanner: React.FC<{ job: SearchJob | null; stages: string[] }> = ({ job, s
         ))}
       </ol>
     )}
-  </div>
+    {job?.status === 'error' && <p role="alert" className="mt-2 text-xs text-unmatched">{job.error}</p>}
+  </Panel>
 )
 
 const ShipRow: React.FC<{ ship: SearchShip; open: boolean; onToggle: () => void }> = ({ ship, open, onToggle }) => {
@@ -150,7 +156,6 @@ export const AreaSearch: React.FC<{
   onClear: () => void
   onGo: () => void
   job: SearchJob | null
-  stages: string[]
   openShip: number | null
   onShip: (id: number | null) => void
   period: [string, string]
@@ -159,7 +164,7 @@ export const AreaSearch: React.FC<{
   pass: number
   onPass: (i: number) => void
   onBox: (b: BBox) => void
-}> = ({ drawing, onDraw, box, onClear, onGo, job, stages, openShip, onShip, period, onPeriod, periodSearch, pass, onPass, onBox }) => {
+}> = ({ drawing, onDraw, box, onClear, onGo, job, openShip, onShip, period, onPeriod, periodSearch, pass, onPass, onBox }) => {
   const [w, h] = box ? boxKm(box) : [0, 0]
   const tooBig = !!box && !periodSearch && Math.max(w, h) > MAX_KM
   const sizeError = box && Math.min(w, h) < MIN_KM
@@ -242,7 +247,15 @@ export const AreaSearch: React.FC<{
         </>
       )}
 
-      {busy && <Scanner job={job} stages={stages} />}
+      {busy && (
+        <div className="space-y-2" role="status">
+          <p className="text-xs text-ink">{job?.stage || 'Sending the box'}</p>
+          <div className="h-1 bg-rule">
+            <div className="h-full bg-signal transition-[width] duration-500" style={{ width: `${Math.max(4, (job?.progress ?? 0) * 100)}%` }} />
+          </div>
+          <p className="text-[11px] text-ink-3">Step by step in the search log below the map.</p>
+        </div>
+      )}
 
       {isPeriod && full && 'passes' in full && (
         <div className="space-y-2">

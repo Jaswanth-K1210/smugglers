@@ -1,35 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { useDashboardStore, STSEvent } from '../store/dashboardStore'
+import { useDashboardStore } from '../store/dashboardStore'
 import { apiService, BBox, GfwLayers, isFailedPass, LiveFeed, passesOf, SearchJob, VesselDetail } from '../services/api'
 import MapComponent, { MapStyle, SHIP_GROUPS } from './Map'
-import { AreaSearch, defaultPeriod } from './AreaSearch'
+import { AreaSearch, ScanOverlay, SearchLog, defaultPeriod } from './AreaSearch'
 import { SearchBox } from './SearchBox'
 import { VesselApiFill } from './VesselApiFill'
 import { News } from './News'
 import { Menu } from './Menu'
 import { VesselCard } from './VesselCard'
 import { StraitPanel } from './StraitPanel'
-import { EventTable } from './EventTable'
-import { ConfidenceChart, TimeSeriesChart } from './Charts'
 import { FilterPanel } from './Filters'
 import { DetectionUpload } from './DetectionUpload'
 import { EventDetail } from './EventDetail'
-import { CategoryBar, Wordmark, useUtcClock } from './Landing'
-import { Panel } from './Panel'
-
-const download = (text: string, type: string, ext: string) => {
-  const url = URL.createObjectURL(new Blob([text], { type }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `sts-candidates-${new Date().toISOString().slice(0, 10)}.${ext}`
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-const toCSV = (events: STSEvent[]) => {
-  const cols: (keyof STSEvent)[] = ['id', 'timestamp', 'status', 'region', 'lat', 'lon', 'distance', 'duration', 'confidence', 'gfw_match', 'vessel1_mmsi', 'vessel2_mmsi']
-  return [cols.join(','), ...events.map((e) => cols.map((c) => `"${String(e[c]).replace(/"/g, '""')}"`).join(','))].join('\n')
-}
+import { Wordmark, useUtcClock } from './Landing'
 
 const scrollTo = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 
@@ -38,7 +21,6 @@ export const Dashboard: React.FC = () => {
   const user = useDashboardStore((s) => s.user)
   const logout = useDashboardStore((s) => s.logout)
   const setEvents = useDashboardStore((s) => s.setEvents)
-  const filtered = useDashboardStore((s) => s.getFilteredEvents())
   const clock = useUtcClock()
 
   const [link, setLink] = useState<{ ok: boolean; at: string } | null>(null)
@@ -62,6 +44,7 @@ export const Dashboard: React.FC = () => {
   const [picked, setPicked] = useState<VesselDetail | null>(null)
   const onVesselLoaded = useCallback((v: VesselDetail) => setPicked(v), [])
   const [showTrack, setShowTrack] = useState(false)
+  const [side, setSide] = useState<'filters' | 'ships' | null>(null)   // right-hand panels open on click
   const [mapStyle, setMapStyle] = useState<MapStyle>(() => {
     // dark by default; a user who picked light keeps it
     try { return localStorage.getItem('sts_map_style') === 'light' ? 'light' : 'dark' } catch { return 'dark' }
@@ -166,15 +149,12 @@ export const Dashboard: React.FC = () => {
   const result = picked0 && !isFailedPass(picked0) ? picked0 : null
 
   const counts = events.reduce<Record<string, number>>((m, e) => ({ ...m, [e.status]: (m[e.status] || 0) + 1 }), {})
-  const meanConf = events.length ? events.reduce((s, e) => s + (e.confidence || 0), 0) / events.length : 0
   const allLive = feed?.vessels ?? []
   const hiddenMembers = new Set<string>(SHIP_GROUPS.filter((g) => hiddenGroups.has(g.id)).flatMap((g) => [...g.members]))
   const live = hiddenMembers.size ? allLive.filter((v) => !hiddenMembers.has(v.group ?? 'unknown')) : allLive
   const stats: [string, string | number][] = [
     ['Live AIS ships in view', feed?.configured ? (feed.in_view ?? allLive.length).toLocaleString() : 'off'],
-    ['Candidates', events.length],
     ['AIS unmatched', counts.AIS_UNMATCHED || 0],
-    ['Mean confidence', `${Math.round(meanConf * 100)}%`],
   ]
 
   const aisPill = !feed ? null
@@ -190,14 +170,10 @@ export const Dashboard: React.FC = () => {
             { label: 'Overview', onSelect: () => { window.location.hash = '#/' } },
             { label: 'Draw a search area', onSelect: () => { clear(); window.scrollTo({ top: 0, behavior: 'smooth' }) } },
             { label: 'Run detection on a tile', onSelect: () => scrollTo('detect') },
-            { label: 'Candidates table', onSelect: () => scrollTo('candidates') },
             { label: 'Sanctions news', onSelect: () => scrollTo('news') },
             { label: 'Strait of Hormuz crossings', onSelect: () => scrollTo('strait') },
             { label: mapStyle === 'light' ? 'Switch to dark map' : 'Switch to light map', onSelect: switchMap },
             { label: showGfw ? 'Hide GFW layers' : 'Show GFW satellite AIS + radar (delayed)', onSelect: () => setShowGfw((g) => !g) },
-            'divider',
-            { label: 'Export candidates as CSV', disabled: !filtered.length, onSelect: () => download(toCSV(filtered), 'text/csv', 'csv') },
-            { label: 'Export candidates as JSON', disabled: !filtered.length, onSelect: () => download(JSON.stringify(filtered, null, 2), 'application/json', 'json') },
             'divider',
             { label: 'How candidates are made', onSelect: () => { window.location.hash = '#method' } },
             { label: 'Sign out', onSelect: () => { logout(); window.location.hash = '#/' } },
@@ -232,33 +208,47 @@ export const Dashboard: React.FC = () => {
             {gfwMsg}
           </p>
         )}
-        <dl className="pointer-events-none absolute left-3 top-3 z-[400] grid grid-cols-2 border border-rule bg-paper/90 sm:grid-cols-4">
-          {stats.map(([label, value]) => (
-            <div key={label} className="border-rule px-3 py-2 [&:not(:last-child)]:border-r">
-              <dd className="text-xl font-bold text-ink">{value}</dd>
-              <dt className="mt-0.5 text-[10px] uppercase tracking-wider text-ink-3">{label}</dt>
-            </div>
-          ))}
-        </dl>
+        {scanning && <ScanOverlay job={job} />}
 
-        {pickedMmsi && (
-          <div className="z-[600] p-1 md:absolute md:bottom-3 md:left-3 md:top-[92px] md:w-[320px] md:overflow-y-auto md:p-0">
+        {/* left: stats, then the area search on top */}
+        <div className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:left-3 md:top-3 md:w-[340px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
+          <dl className="grid grid-cols-2 border border-rule bg-paper/90">
+            {stats.map(([label, value]) => (
+              <div key={label} className="border-rule px-3 py-2 [&:not(:last-child)]:border-r">
+                <dd className="text-xl font-bold text-ink">{value}</dd>
+                <dt className="mt-0.5 text-[10px] uppercase tracking-wider text-ink-3">{label}</dt>
+              </div>
+            ))}
+          </dl>
+          <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
+            job={job} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
+            period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
+          <VesselApiFill bounds={bounds} feed={feed} onFilled={() => bounds && apiService.getLive(bounds).then(setFeed).catch(() => {})} />
+        </div>
+
+        {/* right: only Filters and Ship search, each opened by its button; the picked ship's card below */}
+        <aside className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:right-3 md:top-3 md:w-[330px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
+          <div className="flex justify-end gap-1">
+            {([['ships', 'Search ship'], ['filters', 'Filters']] as const).map(([id, label]) => (
+              <button key={id} onClick={() => setSide(side === id ? null : id)} aria-expanded={side === id}
+                className={side === id ? 'btn-quiet border-signal bg-paper/90 text-signal' : 'btn-quiet bg-paper/90'}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {side === 'ships' && <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />}
+          {side === 'filters' && <FilterPanel />}
+          {pickedMmsi && (
             <VesselCard mmsi={pickedMmsi} onClose={closeVessel} onLoaded={onVesselLoaded} onSearchHere={searchHere}
               showTrack={showTrack} onToggleTrack={() => setShowTrack((t) => !t)} />
-          </div>
-        )}
-
-        <aside className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:right-3 md:top-3 md:w-[330px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
-          <VesselApiFill bounds={bounds} feed={feed} onFilled={() => bounds && apiService.getLive(bounds).then(setFeed).catch(() => {})} />
-          <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />
-          <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
-            job={job} stages={stages} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
-            period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
-          <FilterPanel />
+          )}
         </aside>
       </section>
 
       <main className="grid flex-1 content-start gap-1 bg-paper p-1 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+        {(job || stages.length > 0) && (
+          <div id="log" className="col-span-full"><SearchLog job={job} stages={stages} /></div>
+        )}
         <div id="news" className="col-span-full lg:col-span-2 lg:row-span-2">
           <News className="h-full" />
         </div>
@@ -271,15 +261,7 @@ export const Dashboard: React.FC = () => {
             } catch { /* not on the live map right now */ }
           }} />
         </div>
-        <Panel title="AIS evidence" count={events.length}>
-          {events.length ? <CategoryBar counts={counts} /> : <p className="text-xs text-ink-2">No candidates loaded.</p>}
-        </Panel>
-        <ConfidenceChart />
-        <TimeSeriesChart />
-        <div id="detect"><DetectionUpload /></div>
-        <div id="candidates" className="col-span-full">
-          <EventTable />
-        </div>
+        <div id="detect" className="col-span-full"><DetectionUpload /></div>
       </main>
 
       <EventDetail />

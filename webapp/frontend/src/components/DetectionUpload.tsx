@@ -23,16 +23,16 @@ export const DetectionUpload: React.FC = () => {
 
   return (
     <Panel title="Run detection" right={<span className="text-[10px] uppercase text-ink-3">CPU</span>} bodyClassName="space-y-3 p-3">
-      <p className="text-xs leading-relaxed text-ink-2">Upload one Sentinel-1 tile. The detector runs in a few seconds.</p>
+      <p className="text-sm leading-relaxed text-ink-2">Upload one Sentinel-1 tile. The detector runs in a few seconds.</p>
 
-      <label className="block cursor-pointer rounded-sm border border-dashed border-rule bg-paper px-3 py-4 text-center text-xs hover:border-[#444]">
-        <span className="font-medium text-signal">{file ? file.name : 'Choose a tile'}</span>
-        <span className="mt-1 block text-ink-3">GeoTIFF, JP2, PNG or JPEG</span>
+      <label className="flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-sm border-2 border-dashed border-rule bg-paper px-4 py-10 text-center hover:border-signal/60">
+        <span className="text-base font-medium text-signal">{file ? file.name : 'Choose a radar image to upload'}</span>
+        <span className="mt-2 block text-xs text-ink-3">GeoTIFF, JP2, PNG or JPEG, up to 10 MB</span>
         <input type="file" accept=".tif,.tiff,.jp2,.png,.jpg,.jpeg" className="sr-only"
           onChange={(e) => { setFile(e.target.files?.[0] ?? null); setResult(null); setError(null) }} />
       </label>
 
-      <button onClick={run} disabled={!file || loading} className="btn-primary w-full">
+      <button onClick={run} disabled={!file || loading} className="btn-primary w-full py-3 text-sm">
         {loading ? 'Running detection…' : 'Run detection'}
       </button>
 

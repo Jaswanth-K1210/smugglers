@@ -29,15 +29,6 @@ export const FilterPanel: React.FC = () => {
         </select>
       </div>
 
-      <div>
-        <label htmlFor="conf" className="label">
-          Minimum confidence <span className="font-normal text-ink-2">{Math.round(filter.minConfidence * 100)}%</span>
-        </label>
-        <input id="conf" type="range" min="0" max="100" className="w-full accent-[#44FF88]"
-          value={filter.minConfidence * 100}
-          onChange={(e) => setFilter({ minConfidence: parseInt(e.target.value) / 100 })} />
-      </div>
-
       <button className="btn-quiet w-full"
         onClick={() => { setFilter({ status: 'all', minConfidence: 0, region: 'all' }); setSearchQuery('') }}>
         Clear filters

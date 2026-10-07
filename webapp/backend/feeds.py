@@ -18,7 +18,7 @@ from array import array
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -707,6 +707,10 @@ def parse_rss(xml_text: str, limit: int = 20):
         source = (it.findtext("source") or "").strip()
         if source and title.endswith(f" - {source}"):     # Google appends " - Publisher"
             title = title[: -len(source) - 3]
+        elif (not source or source.startswith("http")) and " - " in title:
+            title, source = title.rsplit(" - ", 1)         # <source> held a web address, not the name
+        if source.startswith("http"):
+            source = urlparse(source).netloc.removeprefix("www.")
         try:
             published = parsedate_to_datetime(it.findtext("pubDate") or "").isoformat()
         except (TypeError, ValueError):

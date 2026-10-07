@@ -203,6 +203,18 @@ def test_news_rss_parse():
     assert items[1]["source"] == "Reuters"
 
 
+def test_news_source_is_a_name_not_a_web_address():
+    from webapp.backend import feeds
+    xml = """<rss><channel>
+      <item><title>Tanker catches fire off Sochi - The Insider</title><link>https://c</link>
+        <source url="https://theins.press/en">https://theins.press/en</source></item>
+      <item><title>Shadow fleet grows</title><link>https://d</link><source>https://www.example.org/x</source></item>
+    </channel></rss>"""
+    a, b = feeds.parse_rss(xml)
+    assert (a["title"], a["source"]) == ("Tanker catches fire off Sochi", "The Insider")
+    assert (b["title"], b["source"]) == ("Shadow fleet grows", "example.org")
+
+
 def test_live_vessel_type_from_static_data(client):
     from webapp.backend import feeds
     feeds.ships.clear(); feeds.statics.clear()

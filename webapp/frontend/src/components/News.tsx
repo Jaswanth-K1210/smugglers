@@ -11,10 +11,23 @@ export const News: React.FC<{ className?: string }> = ({ className }) => {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // A failed load (server waking from sleep, or restarting) is retried in 30 s instead of
+    // leaving the panel empty; after a success the list refreshes every 15 min (the server's cache).
+    let live = true, timer: ReturnType<typeof setTimeout>
+    const load = () => apiService.getNews(region)
+      .then((d) => {
+        if (!live) return
+        setItems(d.items); setError(d.error)
+        timer = setTimeout(load, d.items.length ? 15 * 60000 : 30000)
+      })
+      .catch(() => {
+        if (!live) return
+        setItems((old) => old?.length ? old : []); setError('News is unavailable right now. Retrying…')
+        timer = setTimeout(load, 30000)
+      })
     setItems(null)
-    apiService.getNews(region)
-      .then((d) => { setItems(d.items); setError(d.error) })
-      .catch(() => { setItems([]); setError('News is unavailable right now.') })
+    load()
+    return () => { live = false; clearTimeout(timer) }
   }, [region])
 
   return (

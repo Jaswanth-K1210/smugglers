@@ -402,7 +402,7 @@ export const apiService = {
   },
 
   async getNews(region = 'all'): Promise<{ items: NewsItem[]; error: string | null }> {
-    return (await api.get('/news', { params: { region }, timeout: 15000 })).data
+    return (await api.get('/news', { params: { region }, timeout: 60000 })).data   // the server may be waking up
   },
 
   async startSearch(bbox: BBox, start?: string, end?: string): Promise<{ job_id: string; queue_position: number; period?: [string, string] }> {

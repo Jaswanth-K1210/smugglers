@@ -20,7 +20,7 @@ import secrets
 import time
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -320,11 +320,21 @@ MAX_UPLOAD = 10 * 1024 * 1024
 
 
 @app.post("/api/detect")
-async def detect(file: UploadFile = File(...), _user: dict = Depends(current_user)):
-    """Run the detector on one uploaded tile: here (all-in-one app) or on the Modal worker (Render)."""
-    data = await file.read(MAX_UPLOAD + 1)
-    if len(data) > MAX_UPLOAD:
-        raise HTTPException(413, "Upload an image of at most 10 MB.")
+async def detect(request: Request, _user: dict = Depends(current_user)):
+    """Run the detector on one uploaded tile: here (all-in-one app) or on the Modal worker (Render).
+
+    The image is the raw request body, read in chunks and refused past MAX_UPLOAD. Not a multipart
+    form: python-multipart parses in pure Python on the event loop (13 s for 10 MB measured), which
+    would stall every other request on the server meanwhile."""
+    too_big = HTTPException(413, "Upload an image of at most 10 MB.")
+    if int(request.headers.get("content-length") or 0) > MAX_UPLOAD:
+        raise too_big
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > MAX_UPLOAD:
+            raise too_big
+    data = bytes(data)
     try:
         if SEARCH_MODE == "worker":
             return await asyncio.to_thread(worker.detect, data)

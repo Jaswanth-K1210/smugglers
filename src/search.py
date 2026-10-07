@@ -306,9 +306,10 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
             progress("Looking for ships whose AIS was silent at the pass", 0.96)
             try:
                 silent = context.silent_at_pass(context.ais_around(box, t), t, box)
-            except Exception:
-                silent = []           # context failing must not fail the search
-        result["ais_silent"] = silent
+                result["ais_silent"] = silent
+            except Exception:         # context failing must not fail the search, nor read as "none found"
+                result["ais_silent_note"] = ("The check for ships whose AIS was silent at this pass could not run "
+                                             "(Global Fishing Watch did not answer). Search again later to include it.")
         gaps = None
         if ais_ok and (res.category == dark_sts.AIS_UNMATCHED).any():
             progress("Looking for nearby AIS gap events and maritime zones", 0.97)
@@ -352,7 +353,8 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
                 ship["reasons"].insert(0, f"Weak candidate: detector score {ship['conf']:.2f} is below "
                                           f"{SHIP_CONF:.2f}. Hidden by default; how often scores this low are "
                                           "real ships has not been measured yet.")
-            ship["ais_silent_match"] = context.could_be(r.lat, r.lon, t, silent)[:3] if unmatched else []
+            # full-strength hulls only, as for STS pairs: weak candidates are hidden by default
+            ship["ais_silent_match"] = context.could_be(r.lat, r.lon, t, silent)[:3] if unmatched and not r.weak else []
             if ship["ais_silent_match"]:
                 best = next(x for x in silent if x["key"] == ship["ais_silent_match"][0])
                 more = len(ship["ais_silent_match"]) - 1
@@ -426,8 +428,15 @@ def merge_cells(parts, cores):
            "ais_available": next((p["ais_available"] for p, _ in ok if p.get("ais_available")),
                                  ok[0][0].get("ais_available")),
            "cached": all(p.get("cached") for p, _ in ok),
-           "cells": len(parts), "cells_failed": len(parts) - len(ok),
-           "ais_silent": list({r["key"]: r for p, _ in ok for r in p.get("ais_silent") or []}.values())}
+           "cells": len(parts), "cells_failed": len(parts) - len(ok)}
+    out.pop("ais_silent", None)
+    out.pop("ais_silent_note", None)
+    if any("ais_silent" in p for p, _ in ok):           # only where the check ran: absent is not "none found"
+        out["ais_silent"] = sorted({r["key"]: r for p, _ in ok for r in p.get("ais_silent") or []}.values(),
+                                   key=lambda r: r["silent_h"])
+    note = next((p["ais_silent_note"] for p, _ in ok if p.get("ais_silent_note")), None)
+    if note:
+        out["ais_silent_note"] = note
     context.link_silent(out)
     if len(ok) < len(parts):
         failed = "; ".join(sorted({p["error"] for p in parts if "error" in p}))

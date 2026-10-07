@@ -180,6 +180,7 @@ export interface SearchResult {
   ais_source?: string
   ais_available?: boolean | null
   ais_silent?: AisSilentShip[]
+  ais_silent_note?: string   // the silent-AIS check could not run (absent list is not "none found")
   note: string
 }
 
@@ -349,11 +350,10 @@ export const apiService = {
   },
 
   async detectShip(file: File) {
-    const formData = new FormData()
-    formData.append('file', file)
-    const response = await api.post('/detect', formData, {
+    // the raw file as the body, not a form: the server reads it in chunks without parsing
+    const response = await api.post('/detect', file, {
       timeout: 120000,              // the detector may be waking up on Modal
-      headers: { 'Content-Type': 'multipart/form-data' }
+      headers: { 'Content-Type': file.type || 'application/octet-stream' }
     })
     return response.data
   },

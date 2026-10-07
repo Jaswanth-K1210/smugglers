@@ -141,7 +141,7 @@ def test_health_says_search_is_available_in_worker_mode(monkeypatch):
 def test_upload_runs_on_the_worker_and_billing_stop_is_explained(worker_mode, monkeypatch):
     c = _signed_in(TestClient(backend.app))
     monkeypatch.setattr(backend.worker, "detect", lambda data: {"vessels_count": len(data), "sts_count": 0})
-    r = c.post("/api/detect", files={"file": ("t.png", b"abc", "image/png")})
+    r = c.post("/api/detect", content=b"abc")
     assert r.status_code == 200 and r.json()["vessels_count"] == 3
     assert c.get("/api/health").json()["live_detection"] is True
 
@@ -150,6 +150,6 @@ def test_upload_runs_on_the_worker_and_billing_stop_is_explained(worker_mode, mo
     msgs = iter(["Function call failed: workspace billing cycle spend limit reached", "workspace ac-1 is disabled"])
     monkeypatch.setattr(backend.worker, "detect", refused)
     monkeypatch.setattr(backend.worker, "spawn", refused)
-    for r in (c.post("/api/detect", files={"file": ("t.png", b"abc", "image/png")}),
+    for r in (c.post("/api/detect", content=b"abc"),
               c.post("/api/search", json={"bbox": BOX})):
         assert r.status_code == 503 and "cloud credit" in r.json()["detail"]

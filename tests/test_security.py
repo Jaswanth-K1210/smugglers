@@ -58,7 +58,7 @@ def test_daily_search_quota(client, monkeypatch):
 def test_oversized_upload_refused(client, monkeypatch):
     monkeypatch.setattr(backend, "search_weights", lambda: "w.pt")
     big = io.BytesIO(b"0" * (backend.MAX_UPLOAD + 1))
-    assert client.post("/api/detect", files={"file": ("x.png", big, "image/png")}).status_code == 413
+    assert client.post("/api/detect", content=big.getvalue()).status_code == 413
 
 
 def test_news_drops_script_links(monkeypatch):

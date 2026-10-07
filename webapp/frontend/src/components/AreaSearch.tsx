@@ -373,6 +373,7 @@ export const AreaSearch: React.FC<{
             {result.cached ? ', from an earlier search.' : '.'} {result.scene_note}
           </p>
           {result.ais_silent && <SilentAis ships={result.ais_silent} passTime={result.scene.time} onShip={onShip} />}
+          {result.ais_silent_note && <p className="text-[11px] text-partial">{result.ais_silent_note}</p>}
           {nWeak > 0 && (
             <label className="flex items-start gap-2 text-[11px] text-ink-2">
               <input type="checkbox" checked={showWeak} onChange={(e) => setShowWeak(e.target.checked)} className="mt-0.5" />

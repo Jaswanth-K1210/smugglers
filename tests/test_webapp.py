@@ -134,7 +134,7 @@ def test_api_detect_without_weights(client, monkeypatch):
     monkeypatch.setattr(backend_app, "WEIGHTS", Path("/non/existent/weights.pt"))
 
     fake_file = io.BytesIO(b"fake image bytes")
-    r = client.post("/api/detect", files={"file": ("tile.tif", fake_file, "image/tiff")})
+    r = client.post("/api/detect", content=fake_file.getvalue())
     assert r.status_code == 503
     assert "No detector weights" in r.json()["detail"]
 

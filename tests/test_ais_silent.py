@@ -29,7 +29,7 @@ def test_silent_across_the_pass_and_reachable():
 
 
 def test_cells_share_one_silent_list_linked_to_renumbered_ships():
-    q = {"key": "quiet", "could_be": []}
+    q = {"key": "quiet", "silent_h": 9.0, "could_be": []}
     cores = [(56.0, 25.0, 56.5, 25.5), (56.5, 25.0, 57.0, 25.5)]
     ship = lambda lon, m: {"id": 0, "lat": 25.2, "lon": lon, "category": "AIS_UNMATCHED", "length_m": 200,
                            "weak": False, "ais_silent_match": m}
@@ -37,3 +37,12 @@ def test_cells_share_one_silent_list_linked_to_renumbered_ships():
     b = {"scene": {"time": "t"}, "ships": [ship(56.8, ["quiet"])], "sts": [], "ais_silent": [dict(q)]}
     out = search.merge_cells([a, b], cores)
     assert len(out["ais_silent"]) == 1 and out["ais_silent"][0]["could_be"] == [1]
+
+
+def test_a_check_that_did_not_run_never_reads_as_none_found():
+    cores = [(56.0, 25.0, 56.5, 25.5), (56.5, 25.0, 57.0, 25.5)]
+    plain = {"scene": {"time": "t"}, "ships": [], "sts": []}                     # no AIS: check never ran
+    assert "ais_silent" not in search.merge_cells([dict(plain), dict(plain)], cores)
+    failed = {**plain, "ais_silent_note": "could not run"}
+    out = search.merge_cells([failed, dict(plain)], cores)
+    assert "ais_silent" not in out and out["ais_silent_note"] == "could not run"

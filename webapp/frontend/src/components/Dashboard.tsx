@@ -74,7 +74,8 @@ export const Dashboard: React.FC = () => {
   // Live AIS for whatever the map is showing; refetch on pan and every 15 s
   useEffect(() => {
     if (!bounds) return
-    const load = () => apiService.getLive(bounds).then(setFeed).catch(() => setFeed(null))
+    // a failed refresh keeps the ships already on the map instead of wiping them
+    const load = () => apiService.getLive(bounds).then(setFeed).catch(() => {})
     load()
     const interval = setInterval(load, 15000)
     return () => clearInterval(interval)
@@ -239,7 +240,8 @@ export const Dashboard: React.FC = () => {
           {side === 'ships' && <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />}
           {side === 'filters' && <FilterPanel />}
           {pickedMmsi && (
-            <VesselCard mmsi={pickedMmsi} onClose={closeVessel} onLoaded={onVesselLoaded} onSearchHere={searchHere}
+            <VesselCard mmsi={pickedMmsi} initial={allLive.find((x) => x.mmsi === pickedMmsi)}
+              onClose={closeVessel} onLoaded={onVesselLoaded} onSearchHere={searchHere}
               showTrack={showTrack} onToggleTrack={() => setShowTrack((t) => !t)} />
           )}
         </aside>

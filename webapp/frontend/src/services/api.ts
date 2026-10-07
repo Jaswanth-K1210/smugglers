@@ -372,9 +372,13 @@ export const apiService = {
   },
 
   async getLive(bbox?: BBox): Promise<LiveFeed> {
-    // A zoomed-out map reports longitudes past ±180; the server wants real coordinates.
-    const box = bbox && [Math.max(bbox[0], -180), Math.max(bbox[1], -90), Math.min(bbox[2], 180), Math.min(bbox[3], 90)]
-    return (await api.get('/live', { params: box ? { bbox: box.map((v) => v.toFixed(4)).join(',') } : {} })).data
+    // A zoomed-out map, or one across the 180° line, reports longitudes past ±180. Clamping would
+    // drop the ships on the far side, so such a view asks for every longitude (the map draws each
+    // ship on every copy of the world in view).
+    const wraps = bbox && (bbox[0] < -180 || bbox[2] > 180)
+    const box = bbox && [wraps ? -180 : bbox[0], Math.max(bbox[1], -90), wraps ? 180 : bbox[2], Math.min(bbox[3], 90)]
+    return (await api.get('/live', { params: box ? { bbox: box.map((v) => v.toFixed(4)).join(',') } : {},
+                                     timeout: 60000 })).data   // wide views take the server longest
   },
 
   async searchShips(q: string): Promise<{ mmsi: string; name: string | null; lat: number; lon: number; source: string }[]> {

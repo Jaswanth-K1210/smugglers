@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { apiService, Particulars, ShipPhoto, VesselDetail, VesselIdentity } from '../services/api'
+import { apiService, LiveVessel, Particulars, ShipPhoto, VesselDetail, VesselIdentity } from '../services/api'
 
 const ago = (s?: number) => s === undefined ? null : s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`
 // 'NO' -> 🇳🇴 (regional indicator letters)
@@ -12,7 +12,8 @@ export const VesselCard: React.FC<{
   onSearchHere: (lat: number, lon: number) => void
   showTrack: boolean
   onToggleTrack: () => void
-}> = ({ mmsi, onClose, onLoaded, onSearchHere, showTrack, onToggleTrack }) => {
+  initial?: LiveVessel             // the map's own row: name, position and speed show at once
+}> = ({ mmsi, onClose, onLoaded, onSearchHere, showTrack, onToggleTrack, initial }) => {
   const [v, setV] = useState<VesselDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [photo, setPhoto] = useState<ShipPhoto | null | undefined>(undefined)
@@ -20,24 +21,31 @@ export const VesselCard: React.FC<{
   const [part, setPart] = useState<Particulars | null>(null)
   // 48 h track from Open Waters, kept across the 15 s refreshes (which carry only our own shorter track)
   const longTrack = useRef<[number, number][]>([])
+  const first = useRef(initial)
+  first.current = initial
 
   useEffect(() => {
     let live = true
+    let retry: ReturnType<typeof setTimeout>
     const load = () => apiService.getVessel(mmsi)
       .then((d) => {
         if (!live) return
         if (longTrack.current.length > (d.track?.length ?? 0)) d = { ...d, track: longTrack.current }
         setV(d); setError(null); onLoaded(d)
       })
-      .catch((e) => { if (live) setError(e instanceof Error ? e.message : 'Could not load this ship.') })
-    setV(null)
+      .catch((e) => {
+        if (!live) return
+        setError(`${e instanceof Error ? e.message : 'Could not load this ship.'} Retrying…`)
+        retry = setTimeout(load, 5000)       // the server may be waking up or restarting
+      })
+    setV(first.current ? { ...first.current, type: null } : null)   // full details replace it in ~0.5 s
     setPhoto(undefined)
     setIdent(null)
     setPart(null)
     longTrack.current = []
     load()
     const t = setInterval(load, 15000)   // type, ETA and IMO can arrive a few minutes after the first position
-    return () => { live = false; clearInterval(t) }
+    return () => { live = false; clearInterval(t); clearTimeout(retry) }
   }, [mmsi, onLoaded])
 
   // Slow lookups, once per ship: GFW identity when AIS static data is missing, and a photo by IMO.

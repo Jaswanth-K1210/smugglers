@@ -22,7 +22,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from webapp.backend import store, worker
@@ -561,11 +561,14 @@ def live(bbox: str = None, _user: dict = Depends(current_user)):
         except (ValueError, AssertionError):
             raise HTTPException(422, "Send bbox as west,south,east,north.")
     vessels, total = feeds.live_vessels(box)
-    return {"source": "aisstream.io", "regional": feeds.regional_state, "openwaters": feeds.openwaters_state,
+    body = {"source": "aisstream.io", "regional": feeds.regional_state, "openwaters": feeds.openwaters_state,
             **{k: feeds.state.get(k) for k in ("configured", "connected", "error", "messages", "reconnects")},
             "vesselapi": {"configured": feeds.vesselapi_configured(), "remaining": feeds.vesselapi_state["remaining"],
                           "max_deg": feeds.VESSELAPI_MAX_DEG},
             "in_view": total, "vessels": vessels}
+    # Plain JSON: FastAPI's default encoder walks every value of up to 20k ships (~7x slower), and
+    # while it runs other requests (a ship card) wait behind it.
+    return Response(json.dumps(body, separators=(",", ":"), default=str), media_type="application/json")
 
 
 @app.get("/api/live/search")

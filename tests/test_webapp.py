@@ -180,7 +180,8 @@ def test_live_ais_store_and_bbox(client):
 def test_live_ais_thins_evenly_past_the_cap(monkeypatch):
     from webapp.backend import feeds
     feeds.ships.clear()
-    monkeypatch.setattr(feeds, "MAX_VESSELS", 100)   # 10 × 10 grid
+    monkeypatch.setattr(feeds, "MAX_WIDE", 100)      # 10 × 10 grid for a view wider than WIDE_DEG
+    monkeypatch.setattr(feeds, "MAX_VESSELS", 300)
     for k in range(2000):                           # dense cluster in one corner + sparse spread
         lat, lon = (1 + k * 1e-5, 1 + k * 1e-5) if k < 1900 else ((k % 10) * 9 + 0.5, (k // 10 % 10) * 9 + 0.5)
         feeds._store({"MetaData": {"MMSI": k, "latitude": lat, "longitude": lon}, "Message": {}}, 1.0)
@@ -188,6 +189,7 @@ def test_live_ais_thins_evenly_past_the_cap(monkeypatch):
     assert total == 2000 and len(v) == 100                                # the whole budget is used
     assert max(x["lat"] for x in v) > 45 and max(x["lon"] for x in v) > 45   # far corner still covered
     assert sum(1 for x in v if x["lat"] < 1.1) > 1                        # busy cell gets the leftover
+    assert len(feeds.live_vessels([0, 0, 50, 50], now=1.0)[0]) == 300     # a narrower view gets the larger cap
     feeds.ships.clear()
 
 

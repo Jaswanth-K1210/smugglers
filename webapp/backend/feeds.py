@@ -27,6 +27,8 @@ AISSTREAM_URL = "wss://stream.aisstream.io/v0/stream"
 BOXES = [[[-90, -180], [90, 180]]]
 STALE_S = 60 * 60   # MarineTraffic-style: show the last position for an hour; anchored ships report every ~3 min
 MAX_VESSELS = 20000   # per response; past this the view is thinned evenly, not truncated
+MAX_WIDE = 8000       # views wider than WIDE_DEG: plenty of dots at that zoom, and a fast refresh
+WIDE_DEG = 60
 
 ships: dict = {}       # MMSI -> newest position
 tracks: dict = {}      # MMSI -> array('f') of lat, lon, seconds-since-T0 triples
@@ -474,8 +476,9 @@ def live_vessels(bbox=None, now=None):
     w, s_, e, n = bbox or (-180, -90, 180, 90)
     inside = [v for v in ships.values() if w <= v["lon"] <= e and s_ <= v["lat"] <= n]
     total = len(inside)
-    if total > MAX_VESSELS:
-        inside = _thin(inside, (w, s_, e, n), MAX_VESSELS)
+    cap = MAX_WIDE if e - w > WIDE_DEG else MAX_VESSELS
+    if total > cap:
+        inside = _thin(inside, (w, s_, e, n), cap)
     out = [{**{k: v[k] for k in v if k not in ("t", "nav_status", "mmsi_int", "source")}, "age_s": int(now - v["t"]),
             "group": _group(v["mmsi_int"]), "len": (statics.get(v["mmsi_int"]) or {}).get("length_m")}
            for v in inside]

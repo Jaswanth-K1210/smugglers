@@ -104,32 +104,37 @@ const ShipCanvas: React.FC<{ vessels: LiveVessel[]; onPick: (mmsi: string) => vo
     const pts: typeof points.current = []
     const zoom = map.getZoom()
     const zk = zoom >= 11 ? 1.35 : zoom >= 9 ? 1.15 : zoom >= 6 ? 0.95 : 0.75
+    // Zoomed far out (or across the 180° line) the map shows several copies of the world:
+    // draw each ship on every copy in view, not only on the one between -180° and 180°.
+    const west = map.getBounds().getWest(), east = map.getBounds().getEast()
     for (const v of data.current) {
-      const p = map.latLngToContainerPoint([v.lat, v.lon])
-      if (p.x < -10 || p.y < -10 || p.x > w + 10 || p.y > h + 10) continue
-      pts.push({ x: p.x, y: p.y, v })
-      const dir = v.heading ?? v.cog
-      const style = GROUP_STYLE[v.group ?? 'unknown'] ?? GROUP_STYLE.unknown
-      // bigger ships draw bigger, as on MarineTraffic
-      const k = zk * (v.len == null ? 1 : v.len < 40 ? 0.8 : v.len < 120 ? 1 : v.len < 220 ? 1.15 : 1.3)
-      ctx.fillStyle = style.fill
-      ctx.strokeStyle = style.stroke
-      ctx.lineWidth = v.group === 'tanker' ? 1.6 : 1
-      ctx.beginPath()
-      if ((v.sog ?? 0) >= 0.5 && dir != null) {
-        const a = (dir * Math.PI) / 180
-        const cos = Math.cos(a), sin = Math.sin(a)
-        const shape: [number, number][] = [[0, -8], [4.6, 6], [0, 3.4], [-4.6, 6]]
-        shape.forEach(([sx, sy], i) => {
-          const x = p.x + (sx * cos - sy * sin) * k, y = p.y + (sx * sin + sy * cos) * k
-          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)
-        })
-        ctx.closePath()
-      } else {
-        ctx.arc(p.x, p.y, 3.2 * k, 0, Math.PI * 2)
+      for (let copy = Math.ceil((west - v.lon) / 360); copy <= Math.floor((east - v.lon) / 360); copy++) {
+        const p = map.latLngToContainerPoint([v.lat, v.lon + 360 * copy])
+        if (p.x < -10 || p.y < -10 || p.x > w + 10 || p.y > h + 10) continue
+        pts.push({ x: p.x, y: p.y, v })
+        const dir = v.heading ?? v.cog
+        const style = GROUP_STYLE[v.group ?? 'unknown'] ?? GROUP_STYLE.unknown
+        // bigger ships draw bigger, as on MarineTraffic
+        const k = zk * (v.len == null ? 1 : v.len < 40 ? 0.8 : v.len < 120 ? 1 : v.len < 220 ? 1.15 : 1.3)
+        ctx.fillStyle = style.fill
+        ctx.strokeStyle = style.stroke
+        ctx.lineWidth = v.group === 'tanker' ? 1.6 : 1
+        ctx.beginPath()
+        if ((v.sog ?? 0) >= 0.5 && dir != null) {
+          const a = (dir * Math.PI) / 180
+          const cos = Math.cos(a), sin = Math.sin(a)
+          const shape: [number, number][] = [[0, -8], [4.6, 6], [0, 3.4], [-4.6, 6]]
+          shape.forEach(([sx, sy], i) => {
+            const x = p.x + (sx * cos - sy * sin) * k, y = p.y + (sx * sin + sy * cos) * k
+            i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)
+          })
+          ctx.closePath()
+        } else {
+          ctx.arc(p.x, p.y, 3.2 * k, 0, Math.PI * 2)
+        }
+        ctx.fill()
+        ctx.stroke()
       }
-      ctx.fill()
-      ctx.stroke()
     }
     points.current = pts
   }

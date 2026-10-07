@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
-import { apiService, BBox, GfwLayers, isFailedPass, LiveFeed, passesOf, SearchJob, VesselDetail } from '../services/api'
+import { apiService, BBox, GfwLayers, isFailedPass, LiveFeed, PastSearch, passesOf, SearchJob, VesselDetail } from '../services/api'
 import MapComponent, { MapStyle, SHIP_GROUPS } from './Map'
 import { AreaSearch, ScanOverlay, SearchLog, defaultPeriod } from './AreaSearch'
 import { SearchBox } from './SearchBox'
@@ -8,7 +8,8 @@ import { VesselApiFill } from './VesselApiFill'
 import { News } from './News'
 import { Menu } from './Menu'
 import { VesselCard } from './VesselCard'
-import { StraitPanel } from './StraitPanel'
+import { SilentAtSea } from './SilentAtSea'
+import { MySearches } from './MySearches'
 import { FilterPanel } from './Filters'
 import { DetectionUpload } from './DetectionUpload'
 import { EventDetail } from './EventDetail'
@@ -45,6 +46,7 @@ export const Dashboard: React.FC = () => {
   const onVesselLoaded = useCallback((v: VesselDetail) => setPicked(v), [])
   const [showTrack, setShowTrack] = useState(false)
   const [side, setSide] = useState<'filters' | 'ships' | null>(null)   // right-hand panels open on click
+  const [history, setHistory] = useState(false)                         // left drawer: My searches
   const [mapStyle, setMapStyle] = useState<MapStyle>(() => {
     // dark by default; a user who picked light keeps it
     try { return localStorage.getItem('sts_map_style') === 'light' ? 'light' : 'dark' } catch { return 'dark' }
@@ -139,6 +141,17 @@ export const Dashboard: React.FC = () => {
     }
   }
   // ~20 km box around a ship, ready for Go (the search's minimum is 11 km)
+  // Reopen one of the user's searches: a finished one shows its saved results, a running one resumes polling
+  const openPast = async (p: PastSearch) => {
+    setHistory(false); setStages([]); setOpenShip(null); setPass(0); setDrawing(false)
+    setBox(p.bbox); setFit(p.bbox)
+    if (p.period) setPeriod(p.period)
+    try {
+      setJob(await apiService.getSearch(p.job_id))
+    } catch (e) {
+      setJob({ job_id: p.job_id, status: 'error', progress: 0, error: e instanceof Error ? e.message : 'Could not reopen this search.' })
+    }
+  }
   const searchHere = (lat: number, lon: number) => {
     const dLat = 10 / 110.57, dLon = 10 / (111.32 * Math.cos(lat * Math.PI / 180))
     const b: BBox = [lon - dLon, lat - dLat, lon + dLon, lat + dLat]
@@ -172,7 +185,8 @@ export const Dashboard: React.FC = () => {
             { label: 'Draw a search area', onSelect: () => { clear(); window.scrollTo({ top: 0, behavior: 'smooth' }) } },
             { label: 'Run detection on a tile', onSelect: () => scrollTo('detect') },
             { label: 'Sanctions news', onSelect: () => scrollTo('news') },
-            { label: 'Strait of Hormuz crossings', onSelect: () => scrollTo('strait') },
+            { label: 'My searches', onSelect: () => setHistory(true) },
+            { label: 'AIS stopped at sea, worldwide', onSelect: () => scrollTo('silent') },
             { label: mapStyle === 'light' ? 'Switch to dark map' : 'Switch to light map', onSelect: switchMap },
             { label: showGfw ? 'Hide GFW layers' : 'Show GFW satellite AIS + radar (delayed)', onSelect: () => setShowGfw((g) => !g) },
             'divider',
@@ -185,6 +199,8 @@ export const Dashboard: React.FC = () => {
             {link?.ok === false ? 'Offline' : 'Live'}
           </span>
           <span className="hidden sm:block">{aisPill}</span>
+          <button onClick={() => setHistory((h) => !h)} aria-expanded={history}
+            className={history ? 'pill border-signal text-signal' : 'pill text-ink-2 hover:border-[#444] hover:text-ink'}>My searches</button>
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden text-[11px] text-ink-3 lg:block">
@@ -211,8 +227,15 @@ export const Dashboard: React.FC = () => {
         )}
         {scanning && <ScanOverlay job={job} />}
 
-        {/* left: stats, then the area search on top */}
-        <div className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:left-3 md:top-3 md:w-[340px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
+        {/* top centre: the area search */}
+        <div className="z-[500] p-1 md:absolute md:left-1/2 md:top-3 md:max-h-[calc(100%-1.5rem)] md:w-[380px] md:-translate-x-1/2 md:overflow-y-auto md:p-0">
+          <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
+            job={job} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
+            period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
+        </div>
+
+        {/* left: live counts and "Fill this view" */}
+        <div className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:left-3 md:top-3 md:w-[300px] md:p-0 [&>*]:pointer-events-auto">
           <dl className="grid grid-cols-2 border border-rule bg-paper/90">
             {stats.map(([label, value]) => (
               <div key={label} className="border-rule px-3 py-2 [&:not(:last-child)]:border-r">
@@ -221,9 +244,6 @@ export const Dashboard: React.FC = () => {
               </div>
             ))}
           </dl>
-          <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
-            job={job} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
-            period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
           <VesselApiFill bounds={bounds} feed={feed} onFilled={() => bounds && apiService.getLive(bounds).then(setFeed).catch(() => {})} />
         </div>
 
@@ -247,25 +267,22 @@ export const Dashboard: React.FC = () => {
         </aside>
       </section>
 
-      <main className="grid flex-1 content-start gap-1 bg-paper p-1 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+      <main className="grid flex-1 content-start gap-1 bg-paper p-1 lg:grid-cols-3">
         {(job || stages.length > 0) && (
-          <div id="log" className="col-span-full"><SearchLog job={job} stages={stages} /></div>
+          <div id="log" className="lg:col-span-3"><SearchLog job={job} stages={stages} /></div>
         )}
-        <div id="news" className="col-span-full lg:col-span-2 lg:row-span-2">
-          <News className="h-full" />
-        </div>
-        <div id="strait" className="col-span-full lg:col-span-2 lg:row-span-2">
-          <StraitPanel className="h-full" onShip={async (name) => {
-            try {
-              const hits = await apiService.searchShips(name)
-              const hit = hits.find((h) => (h.name ?? '').toUpperCase() === name.toUpperCase()) ?? hits[0]
-              if (hit) { setFocus({ lat: hit.lat, lon: hit.lon, zoom: 10 }); setPickedMmsi(hit.mmsi); setShowTrack(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }
-            } catch { /* not on the live map right now */ }
+        <div id="news"><News className="h-full" /></div>
+        <div id="silent">
+          <SilentAtSea className="h-full" onShip={(s) => {
+            const at = s.on ?? s.off
+            setFocus({ lat: at.lat, lon: at.lon, zoom: 9 }); setPickedMmsi(s.mmsi); setShowTrack(false)
+            window.scrollTo({ top: 0, behavior: 'smooth' })
           }} />
         </div>
-        <div id="detect" className="col-span-full"><DetectionUpload /></div>
+        <div id="detect"><DetectionUpload /></div>
       </main>
 
+      <MySearches open={history} onClose={() => setHistory(false)} onOpen={openPast} />
       <EventDetail />
     </div>
   )

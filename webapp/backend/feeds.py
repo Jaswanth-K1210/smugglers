@@ -153,6 +153,9 @@ def _store(msg: dict, now: float):
 
 
 def _track(mmsi, lat, lon, now):
+    q = quiet.get(mmsi)
+    if q and q["on"] is None and now > q["off"]["t"]:          # AIS back on after a silence at sea
+        q["on"] = {"t": now, "lat": round(lat, 5), "lon": round(lon, 5)}
     tr = tracks.get(mmsi)
     rel = now - T0
     if tr is None:
@@ -258,6 +261,10 @@ def vessel(mmsi: str, now=None):
     pos, st = ships.get(key), statics.get(key)
     if st and now - st["t"] > STALE_S + STATIC_TTL:
         st = None
+    gone = None if pos else quiet.get(key)
+    if gone:                                     # silent at sea: show its last report
+        pos = {"name": gone["name"], "lat": gone["off"]["lat"], "lon": gone["off"]["lon"], "sog": gone["sog"],
+               "cog": gone["cog"], "heading": None, "t": gone["off"]["t"], "source": "silent"}
     va = None if pos else vesselapi_rows.get(str(key))
     if va:                                       # on the map from "Fill this view" only (e.g. India)
         pos = {**{k: va[k] for k in ("name", "lat", "lon", "sog", "cog", "heading")}, "t": va["reported"],
@@ -278,6 +285,8 @@ def vessel(mmsi: str, now=None):
     if src.startswith("openwaters:"):
         from src.openwaters import credit
         out["source"] = credit(src.split(":", 1)[1])
+    elif src == "silent":
+        out["source"] = "Last report before its AIS went silent at sea"
     elif src == "vesselapi":
         out["source"] = "VesselAPI (fetched on request; position only, no destination)"
     else:
@@ -446,6 +455,98 @@ async def run_aisstream(key: str):
         await asyncio.sleep(10)
 
 
+# ── Ships whose AIS went silent at sea (worldwide, from the live feeds) ────────
+# A ship under way stops reporting while other ships are still heard both where it was
+# and where it should be by now (its last speed and course carried forward). If nobody is
+# heard where it should be, it most likely sailed out of receiver range: not counted.
+QUIET_AFTER_S = 30 * 60        # under way, Class A ships report every few seconds
+QUIET_KEEP_S = 24 * 3600
+QUIET_MIN_KN = 3.0             # slower ships are often entering port, anchoring or drifting
+QUIET_NEAR_KM = 20.0
+QUIET_MIN_HEARD = 2            # other ships heard in the last 10 min within QUIET_NEAR_KM
+QUIET_MAX = 20_000
+QUIET_STATUS_SKIP = {1, 5, 6}  # at anchor, moored, aground: reports slow down legitimately
+quiet: dict = {}               # mmsi -> {off, on, heard_near, ...}
+_CELL = 0.25                   # degrees; heard-ship lookup grid
+
+
+def _km(lat1, lon1, lat2, lon2):
+    x = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
+    return 6371.0 * math.hypot(x, math.radians(lat2 - lat1))
+
+
+def _ahead(lat, lon, sog, cog, hours):
+    """Position after `hours` at sog knots on course cog (flat-earth, fine for < 100 km)."""
+    d = sog * 1.852 * hours
+    a = math.radians(cog)
+    lat2 = lat + d * math.cos(a) / 110.57
+    lon2 = lon + d * math.sin(a) / (111.32 * max(math.cos(math.radians(lat)), 0.05))
+    return max(-89.9, min(89.9, lat2)), (lon2 + 180) % 360 - 180
+
+
+def find_quiet(now):
+    """Record ships that went silent at sea since the last call (runs before stale positions are dropped)."""
+    heard: dict = {}
+    for v in ships.values():
+        if now - v["t"] <= 600:
+            heard.setdefault((int(v["lat"] // _CELL), int(v["lon"] // _CELL)), []).append((v["lat"], v["lon"]))
+
+    def n_heard(lat, lon, skip):
+        ci, cj, out = int(lat // _CELL), int(lon // _CELL), 0
+        for i in (ci - 1, ci, ci + 1):
+            for j in (cj - 1, cj, cj + 1):
+                out += sum(1 for a, b in heard.get((i, j), ()) if (a, b) != skip and _km(lat, lon, a, b) <= QUIET_NEAR_KM)
+        return out
+
+    for k, v in ships.items():
+        age = now - v["t"]
+        if age < QUIET_AFTER_S or age > STALE_S or (k in quiet and quiet[k]["on"] is None):
+            continue
+        sog, cog = v.get("sog"), v.get("cog")
+        if sog is None or sog < QUIET_MIN_KN or sog > 60 or cog is None or v.get("nav_status") in QUIET_STATUS_SKIP:
+            continue
+        if k in quiet and quiet[k]["off"]["t"] >= v["t"]:
+            continue                                     # this silence is already recorded
+        here = n_heard(v["lat"], v["lon"], (v["lat"], v["lon"]))
+        lat2, lon2 = _ahead(v["lat"], v["lon"], sog, cog, age / 3600)
+        there = n_heard(lat2, lon2, (v["lat"], v["lon"]))
+        if here < QUIET_MIN_HEARD or there < QUIET_MIN_HEARD:
+            continue                                     # thin reception: probably out of range, not silent
+        quiet[k] = {"mmsi": str(k), "name": v.get("name"), "sog": sog, "cog": cog,
+                    "off": {"t": v["t"], "lat": v["lat"], "lon": v["lon"]}, "on": None,
+                    "heard_near": min(here, there), "source": v.get("source") or "aisstream"}
+    for k in [k for k, q in quiet.items()
+              if now - (q["on"] or q["off"])["t"] > QUIET_KEEP_S]:
+        del quiet[k]
+    if len(quiet) > QUIET_MAX:
+        for k in sorted(quiet, key=lambda k: quiet[k]["off"]["t"])[:len(quiet) - QUIET_MAX]:
+            del quiet[k]
+
+
+def silent_at_sea(now=None, state="all", limit=50):
+    """Ranked ships whose AIS went silent at sea: longest silence first.
+
+    state: 'silent' (not heard since), 'back' (AIS came back on), or 'all'."""
+    now = now or time.time()
+    out = []
+    for q in quiet.values():
+        back = q["on"] is not None
+        if (state == "silent" and back) or (state == "back" and not back):
+            continue
+        hours = ((q["on"]["t"] if back else now) - q["off"]["t"]) / 3600
+        st = statics.get(int(q["mmsi"])) or {}
+        row = {"mmsi": q["mmsi"], "name": q["name"] or st.get("name"), "type": ship_type(st.get("type_code")),
+               "flag": flag(int(q["mmsi"])), "imo": st.get("imo"), "length_m": st.get("length_m"),
+               "destination": st.get("destination"), "sog": q["sog"], "cog": q["cog"],
+               "off": {**q["off"], "ago_h": round((now - q["off"]["t"]) / 3600, 1)},
+               "on": None, "silent_h": round(hours, 1), "heard_near": q["heard_near"]}
+        if back:
+            row["on"] = {**q["on"], "moved_km": round(_km(q["off"]["lat"], q["off"]["lon"], q["on"]["lat"], q["on"]["lon"]), 1)}
+        out.append(row)
+    out.sort(key=lambda r: -r["silent_h"])
+    return out[:limit]
+
+
 def prune(now=None):
     """Drop stale positions and details, then hold both under their caps (oldest first).
 
@@ -453,6 +554,7 @@ def prune(now=None):
     cannot grow while nobody is looking."""
     now = now or time.time()
     _last_prune["t"] = now
+    find_quiet(now)
     for k in [k for k, v in ships.items() if now - v["t"] > STALE_S]:
         del ships[k]
         tracks.pop(k, None)

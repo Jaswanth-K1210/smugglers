@@ -87,6 +87,12 @@ class MemorySearches:
         with self.lock:
             return [dict(r) for r in self.rows.values() if r["user"] == user and r["created"] >= t]
 
+    def recent(self, user, limit=50):
+        """The user's searches, newest first, without their (large) results."""
+        with self.lock:
+            rows = sorted((r for r in self.rows.values() if r["user"] == user), key=lambda r: -r["created"])
+            return [{k: v for k, v in r.items() if k != "result"} for r in rows[:limit]]
+
 
 class MongoSearches:
     def __init__(self, db):
@@ -107,7 +113,11 @@ class MongoSearches:
         return list(self.c.find({"status": {"$in": ["queued", "running"]}}, {"_id": 0}))
 
     def since(self, user, t):
-        return list(self.c.find({"user": user, "created": {"$gte": t}}, {"_id": 0}))
+        return list(self.c.find({"user": user, "created": {"$gte": t}}, {"_id": 0, "result": 0}))
+
+    def recent(self, user, limit=50):
+        """The user's searches, newest first, without their (large) results."""
+        return list(self.c.find({"user": user}, {"_id": 0, "result": 0}).sort("created", -1).limit(limit))
 
 
 def _mongo_db():

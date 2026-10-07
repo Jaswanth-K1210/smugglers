@@ -153,3 +153,21 @@ def test_upload_runs_on_the_worker_and_billing_stop_is_explained(worker_mode, mo
     for r in (c.post("/api/detect", content=b"abc"),
               c.post("/api/search", json={"bbox": BOX})):
         assert r.status_code == 503 and "cloud credit" in r.json()["detail"]
+
+
+def test_my_searches_lists_and_reopens_finished_results(worker_mode, mongo):
+    c = _signed_in(TestClient(backend.app))
+    job = c.post("/api/search", json={"bbox": BOX, "start": "2026-09-15", "end": "2026-09-30"}).json()["job_id"]
+    ship = {"id": 0, "lat": 25.2, "lon": 56.5, "category": "AIS_UNMATCHED", "chip_png": "x" * 5000}
+    worker_mode["result"] = {"passes": [{"scene": {"time": "t"}, "ships": [ship], "counts": {}}], "passes_searched": 1,
+                             "counts": {"ships": 1, "ais_unmatched": 1, "sts_pairs": 0}}
+    assert c.get(f"/api/search/{job}").json()["status"] == "done"
+    mine = c.get("/api/searches").json()
+    assert [s["job_id"] for s in mine["searches"]] == [job] and mine["searches"][0]["summary"]["ais_unmatched"] == 1
+    assert mine["today"]["searches"] == 1 and mine["today"]["units"] >= 1
+    again = c.get(f"/api/search/{job}").json()                         # reopened later: result kept, chips not
+    assert again["status"] == "done" and again["result"]["passes"][0]["ships"][0]["lat"] == 25.2
+    assert "chip_png" not in again["result"]["passes"][0]["ships"][0]
+    other = _signed_in(TestClient(backend.app), "o@example.org")
+    assert other.get("/api/searches").json()["searches"] == []                    # only your own
+    assert other.get(f"/api/search/{job}").status_code == 404

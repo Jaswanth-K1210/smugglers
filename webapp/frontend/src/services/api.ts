@@ -67,17 +67,6 @@ export interface VesselIdentity {
   source: string
 }
 
-export interface StraitCrossing {
-  name: string | null
-  category: string | null
-  flag: string | null
-  dwt: number | null
-  length_m: number | null
-  direction: 'inbound' | 'outbound' | string
-  at: string
-  unobserved_h: number | null
-  destination: string | null
-}
 
 export interface Particulars {
   fields: Partial<Record<'ship_type' | 'builder' | 'year_built' | 'gross_tonnage' | 'deadweight' | 'registry' | 'home_port', string | number>>
@@ -221,6 +210,44 @@ export interface SearchEstimate {
   last: string
 }
 
+/** Worldwide: a ship whose AIS went silent at sea while others nearby were still heard. */
+export interface SilentShip {
+  mmsi: string
+  name: string | null
+  type: string | null
+  flag: { iso2: string; country: string } | null
+  imo: number | null
+  length_m: number | null
+  destination: string | null
+  sog: number
+  cog: number
+  off: { t: number; lat: number; lon: number; ago_h: number }
+  on: { t: number; lat: number; lon: number; moved_km: number } | null
+  silent_h: number
+  heard_near: number
+}
+export interface SilentFeed {
+  ships: SilentShip[]
+  since_s: number
+  rule: { min_kn: number; after_min: number; heard_km: number; min_heard: number }
+}
+
+/** One of the user's own searches, for "My searches". */
+export interface PastSearch {
+  job_id: string
+  created: number
+  status: 'queued' | 'running' | 'done' | 'error'
+  error?: string | null
+  bbox: BBox
+  period?: [string, string] | null
+  units?: number | null
+  summary?: { ships: number | null; ais_unmatched: number | null; sts_pairs: number | null; weak_candidates: number | null; passes: number | null } | null
+}
+export interface MySearches {
+  searches: PastSearch[]
+  today: { searches: number; daily_searches: number; units: number; daily_units: number }
+}
+
 export interface SearchJob {
   job_id: string
   status: 'queued' | 'running' | 'done' | 'error'
@@ -229,6 +256,7 @@ export interface SearchJob {
   queue_position?: number
   error?: string
   result?: SearchResult | PeriodResult
+  bbox?: BBox                       // a reopened search carries its box
   stages?: string[]                 // period search: one line per pass
   passes?: number
   passes_found?: number | null
@@ -401,9 +429,6 @@ export const apiService = {
     return (await api.get('/gfw/layers', { params: { bbox: bbox.map((v) => v.toFixed(2)).join(',') }, timeout: 120000 })).data
   },
 
-  async getStraitCrossings(hours = 48): Promise<{ hours: number; crossings: StraitCrossing[]; source: string }> {
-    return (await api.get('/strait/crossings', { params: { hours }, timeout: 30000 })).data
-  },
 
   async getNews(region = 'all'): Promise<{ items: NewsItem[]; error: string | null }> {
     return (await api.get('/news', { params: { region }, timeout: 60000 })).data   // the server may be waking up
@@ -416,6 +441,14 @@ export const apiService = {
 
   async estimateSearch(bbox: BBox, start: string, end: string): Promise<SearchEstimate> {
     return (await api.post('/search/estimate', { bbox, start, end }, { timeout: 60000 })).data
+  },
+
+  async getSilentShips(state: 'all' | 'silent' | 'back' = 'all'): Promise<SilentFeed> {
+    return (await api.get('/live/silent', { params: { state, limit: 100 }, timeout: 60000 })).data
+  },
+
+  async getMySearches(): Promise<MySearches> {
+    return (await api.get('/searches', { timeout: 60000 })).data
   },
 
   async getSearch(jobId: string): Promise<SearchJob> {

@@ -396,7 +396,7 @@ def _run_search(job_id, box, weights):
     try:
         result = search.run(box, weights, progress=lambda stage, frac: _set(job_id, stage=stage,
                                                                             progress=round(frac, 2)))
-        _set(job_id, status="done", stage="Done", progress=1.0, result=result)
+        _set(job_id, status="done", stage="Done", progress=1.0, **_saved(result))
     except (ValueError, LookupError) as e:
         _set(job_id, status="error", error=str(e))
     except Exception as e:                           # show something useful, never a stack trace
@@ -494,6 +494,26 @@ def start_search(payload: dict, user: dict = Depends(current_user)):
             **{k: row[k] for k in ("period", "estimate") if k in row}}
 
 
+SAVE_MAX_BYTES = 12_000_000    # MongoDB documents stop at 16 MB
+
+
+def _saved(res):
+    """What a finished search keeps for "My searches": the result without image chips (the bulk),
+    or only its counts if even that is too large; plus a one-line summary for the list."""
+    import copy
+    keep = copy.deepcopy(res)
+    for p in keep.get("passes") or [keep]:
+        for sh in p.get("ships") or []:
+            sh.pop("chip_png", None)
+    if len(json.dumps(keep, default=str)) > SAVE_MAX_BYTES:
+        keep = {k: v for k, v in keep.items() if k != "passes"}
+        keep["trimmed"] = "This search was too large to keep every ship; only its counts were saved."
+    c = res.get("counts") or {}
+    summary = {k: c.get(k) for k in ("ships", "ais_unmatched", "sts_pairs", "weak_candidates")}
+    summary["passes"] = res.get("passes_searched", 1 if "scene" in res else None)
+    return {"result": keep, "summary": summary}
+
+
 def _worker_status(job):
     """Poll the Modal worker: progress while running, the period result when done."""
     try:
@@ -508,7 +528,7 @@ def _worker_status(job):
         _set(job["job_id"], status="error", error=st["error"])
         return {"job_id": job["job_id"], "status": "error", "error": st["error"]}
     if res is not None:
-        _set(job["job_id"], status="done", progress=1.0)
+        _set(job["job_id"], status="done", progress=1.0, **_saved(res))
         return {"job_id": job["job_id"], "status": "done", "progress": 1.0, "stage": "Done",
                 "period": job.get("period"), "result": res}
     n, u = st["passes"], st.get("units") or 0
@@ -517,6 +537,17 @@ def _worker_status(job):
     return {"job_id": job["job_id"], "status": "running", "progress": st["progress"], "stage": stage,
             "stages": st["stages"], "passes": n, "passes_found": st["passes_found"], "period": job.get("period"),
             "estimate": job.get("estimate")}
+
+
+@app.get("/api/searches")
+def my_searches(user: dict = Depends(current_user)):
+    """The user's own searches, newest first, and what is left of today's allowance."""
+    now = time.time()
+    today = _searches().since(user["email"], now - 86400)
+    keep = ("job_id", "created", "status", "error", "bbox", "period", "units", "estimate", "summary", "mode")
+    return {"searches": [{k: r.get(k) for k in keep} for r in _searches().recent(user["email"], 50)],
+            "today": {"searches": len(today), "daily_searches": DAILY_SEARCHES,
+                      "units": sum(r.get("units") or 0 for r in today), "daily_units": DAILY_UNITS}}
 
 
 @app.get("/api/search/{job_id}")
@@ -600,6 +631,17 @@ def live_vesselapi(payload: dict, user: dict = Depends(current_user)):
         raise HTTPException(422, str(e))
     _va_clicks[user["email"]] = recent + [now]
     return out
+
+
+@app.get("/api/live/silent")
+def live_silent(state: str = "all", limit: int = 50, _user: dict = Depends(current_user)):
+    """Worldwide: ships whose AIS went silent at sea in the last 24 h, longest silence first."""
+    if state not in ("all", "silent", "back"):
+        raise HTTPException(422, "state is all, silent or back.")
+    rows = feeds.silent_at_sea(state=state, limit=max(1, min(limit, 200)))
+    return {"ships": rows, "since_s": int(time.time() - feeds.T0),
+            "rule": {"min_kn": feeds.QUIET_MIN_KN, "after_min": feeds.QUIET_AFTER_S // 60,
+                     "heard_km": feeds.QUIET_NEAR_KM, "min_heard": feeds.QUIET_MIN_HEARD}}
 
 
 @app.get("/api/live/{mmsi}")

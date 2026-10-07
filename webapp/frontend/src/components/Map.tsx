@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, CircleMarker, Tooltip, ZoomControl, Rectangle, Polyline, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import { useDashboardStore } from '../store/dashboardStore'
-import { STATUS, STATUS_ORDER } from '../status'
+import { STATUS } from '../status'
 import type { BBox, GfwLayers, LiveVessel, SearchResult } from '../services/api'
 
 const SILENT = '#B98CFF'      // ships whose AIS was silent across the pass
@@ -222,11 +222,9 @@ export const MapComponent: React.FC<{
   onPickVessel: (mmsi: string) => void
   picked: { lat: number; lon: number } | null
   track: [number, number][] | null
-  hidden: Set<string>
-  onToggleGroup: (id: string) => void
   mapStyle: MapStyle
   gfw: GfwLayers | null
-}> = ({ live, drawing, box, onBox, scanning, result, onBounds, focus, fit, onShip, onPickVessel, picked, track, hidden, onToggleGroup, mapStyle, gfw }) => {
+}> = ({ live, drawing, box, onBox, scanning, result, onBounds, focus, fit, onShip, onPickVessel, picked, track, mapStyle, gfw }) => {
   const events = useDashboardStore((s) => s.getFilteredEvents())
   const selected = useDashboardStore((s) => s.selectedEvent)
   const showWeak = useDashboardStore((s) => s.showWeak)
@@ -310,42 +308,6 @@ export const MapComponent: React.FC<{
           </CircleMarker>
         ))}
       </MapContainer>
-
-      <div className="absolute bottom-7 right-3 z-[400] border border-rule bg-paper/90 px-2.5 py-1.5 text-[11px] md:right-[350px]">
-        <p className="mb-1 text-[10px] uppercase tracking-wider text-ink-3">Live ships, click to filter</p>
-        <ul className="space-y-0.5">
-          {SHIP_GROUPS.map((g) => (
-            <li key={g.id}>
-              <button onClick={() => onToggleGroup(g.id)} aria-pressed={!hidden.has(g.id)}
-                className={`flex items-center gap-2 hover:text-ink ${hidden.has(g.id) ? 'text-ink-3 line-through' : 'text-ink-2'}`}>
-                <svg width="10" height="10" viewBox="-6 -8 12 14" aria-hidden="true">
-                  <path d="M0 -7 L4.2 5 L0 2.6 L-4.2 5 Z" fill={hidden.has(g.id) ? 'transparent' : g.fill}
-                    stroke={g.stroke} strokeWidth="1.2" />
-                </svg>
-                {g.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-        {gfw && (
-          <>
-            <p className="mb-1 mt-2 text-[10px] uppercase tracking-wider text-ink-3">GFW, {gfw.day} ({gfw.delay_days} d delayed)</p>
-            <ul className="pointer-events-none space-y-0.5">
-              <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full border-[1.5px] border-[#0E9AA7]" />AIS vessel</li>
-              <li className="flex items-center gap-2"><span className="h-3 w-3 rounded-full border-[2.5px] border-[#D9782F]" />Radar, no AIS</li>
-              <li className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full border border-dashed border-[#8A8A8A]" />Radar, AIS matched</li>
-            </ul>
-          </>
-        )}
-        <p className="mb-1 mt-2 text-[10px] uppercase tracking-wider text-ink-3">Published candidates</p>
-        <ul className="pointer-events-none space-y-0.5">
-          {STATUS_ORDER.map((k) => (
-            <li key={k} className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: STATUS[k].color }} />{STATUS[k].label}
-            </li>
-          ))}
-        </ul>
-      </div>
     </section>
   )
 }

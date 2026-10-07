@@ -413,9 +413,6 @@ export const apiService = {
     return (await api.get('/live/search', { params: { q } })).data.ships
   },
 
-  async fillFromVesselApi(bbox: BBox): Promise<{ added: number; remaining: number | null }> {
-    return (await api.post('/live/vesselapi', { bbox }, { timeout: 60000 })).data
-  },
 
   async getVessel(mmsi: string): Promise<VesselDetail> {
     return (await api.get(`/live/${mmsi}`)).data

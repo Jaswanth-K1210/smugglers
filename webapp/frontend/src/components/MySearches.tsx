@@ -36,7 +36,7 @@ export const MySearches: React.FC<{ open: boolean; onClose: () => void; onOpen: 
   ] : []
 
   return (
-    <aside className="fixed bottom-0 left-0 top-10 z-[1100] flex w-[360px] max-w-full flex-col border-r border-rule bg-surface shadow-2xl"
+    <aside className="fixed bottom-0 left-0 top-12 z-[1100] flex w-[360px] max-w-full flex-col border-r border-rule bg-surface shadow-2xl"
       role="dialog" aria-label="My searches">
       <header className="flex items-center justify-between border-b border-rule px-3 py-2">
         <h2 className="text-[11px] font-bold uppercase tracking-wider text-ink">My searches</h2>

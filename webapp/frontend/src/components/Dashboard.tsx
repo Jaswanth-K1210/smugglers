@@ -4,9 +4,7 @@ import { apiService, BBox, GfwLayers, isFailedPass, LiveFeed, PastSearch, passes
 import MapComponent, { MapStyle, SHIP_GROUPS } from './Map'
 import { AreaSearch, ScanOverlay, SearchLog, defaultPeriod } from './AreaSearch'
 import { SearchBox } from './SearchBox'
-import { VesselApiFill } from './VesselApiFill'
 import { News } from './News'
-import { Menu } from './Menu'
 import { VesselCard } from './VesselCard'
 import { SilentAtSea } from './SilentAtSea'
 import { MySearches } from './MySearches'
@@ -178,93 +176,94 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <header className="relative z-[1050] flex h-10 shrink-0 items-center justify-between gap-3 border-b border-rule bg-surface px-3 sm:px-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <Menu items={[
-            { label: 'Overview', onSelect: () => { window.location.hash = '#/' } },
-            { label: 'Draw a search area', onSelect: () => { clear(); window.scrollTo({ top: 0, behavior: 'smooth' }) } },
-            { label: 'Run detection on a tile', onSelect: () => scrollTo('detect') },
-            { label: 'Sanctions news', onSelect: () => scrollTo('news') },
-            { label: 'My searches', onSelect: () => setHistory(true) },
-            { label: 'AIS stopped at sea, worldwide', onSelect: () => scrollTo('silent') },
-            { label: mapStyle === 'light' ? 'Switch to dark map' : 'Switch to light map', onSelect: switchMap },
-            { label: showGfw ? 'Hide GFW layers' : 'Show GFW satellite AIS + radar (delayed)', onSelect: () => setShowGfw((g) => !g) },
-            'divider',
-            { label: 'How candidates are made', onSelect: () => { window.location.hash = '#method' } },
-            { label: 'Sign out', onSelect: () => { logout(); window.location.hash = '#/' } },
-          ]} />
+      <header className="relative z-[1050] flex h-12 shrink-0 items-center gap-4 border-b border-rule bg-surface px-3 sm:px-4">
+        <div className="flex shrink-0 items-center gap-3">
           <Wordmark />
-          <span className={link?.ok === false ? 'pill border-unmatched/40 bg-unmatched/10 text-unmatched' : 'pill-live'}>
+          <span className={link?.ok === false ? 'pill border-unmatched/40 bg-unmatched/10 text-unmatched' : 'pill-live'}
+            title={link?.ok === false ? `Last sync ${link.at}` : link ? `Synced ${link.at}` : 'Connecting'}>
             <span className={`live-dot mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle ${link?.ok === false ? 'bg-unmatched' : 'bg-signal'}`} />
             {link?.ok === false ? 'Offline' : 'Live'}
           </span>
-          <span className="hidden sm:block">{aisPill}</span>
-          <button onClick={() => setHistory((h) => !h)} aria-expanded={history}
-            className={history ? 'pill border-signal text-signal' : 'pill text-ink-2 hover:border-[#444] hover:text-ink'}>My searches</button>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="hidden text-[11px] text-ink-3 lg:block">
-            {link?.ok === false ? `last sync ${link.at}` : link ? `sync ${link.at}` : 'connecting'}
-          </span>
+        <nav aria-label="Sections" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-[11px] uppercase tracking-wider">
+          {([
+            ['Map', () => window.scrollTo({ top: 0, behavior: 'smooth' }), false],
+            ['My searches', () => setHistory((h) => !h), history],
+            ['AIS stopped at sea', () => scrollTo('silent'), false],
+            ['News', () => scrollTo('news'), false],
+            ['Run detection', () => scrollTo('detect'), false],
+            ['Method', () => { window.location.hash = '#method' }, false],
+          ] as const).map(([label, go, on]) => (
+            <button key={label} onClick={go} aria-pressed={on}
+              className={`shrink-0 px-2 py-1.5 ${on ? 'text-signal' : 'text-ink-2 hover:text-ink'}`}>{label}</button>
+          ))}
+        </nav>
+        <div className="flex shrink-0 items-center gap-2 text-[11px]">
+          <span className="hidden lg:block">{aisPill}</span>
           <span className="pill hidden md:block">{clock}</span>
-          <span className="hidden max-w-[10rem] truncate pl-1 text-[11px] text-ink-2 md:block">{user?.name}</span>
+          <button onClick={() => setShowGfw((g) => !g)} aria-pressed={showGfw} title="Global Fishing Watch satellite AIS and radar detections (days delayed)"
+            className={showGfw ? 'pill border-signal text-signal' : 'pill text-ink-2 hover:text-ink'}>GFW layers</button>
+          <button onClick={switchMap} title="Switch the map theme" className="pill text-ink-2 hover:text-ink">
+            {mapStyle === 'light' ? 'Dark map' : 'Light map'}
+          </button>
+          <span className="hidden max-w-[9rem] truncate pl-1 text-ink-2 md:block">{user?.name}</span>
+          <button onClick={() => { logout(); window.location.hash = '#/' }} className="text-ink-3 hover:text-ink">Sign out</button>
         </div>
       </header>
 
-      <section className="relative shrink-0 border-b border-rule md:h-[calc(100vh-40px)] md:max-h-[860px] md:min-h-[520px]">
-        <div className="h-[60vh] md:h-full">
-          <MapComponent live={live} drawing={drawing} box={box} onBox={onBox} scanning={scanning} result={result}
-            onBounds={setBounds} focus={focus} fit={fit} onShip={setOpenShip}
-            onPickVessel={(m) => { setPickedMmsi(m); setShowTrack(false) }}
-            picked={picked?.lat != null ? { lat: picked.lat, lon: picked.lon! } : null}
-            track={showTrack ? picked?.track ?? null : null} hidden={hiddenGroups} onToggleGroup={toggleGroup} mapStyle={mapStyle} gfw={showGfw ? gfw : null} />
-        </div>
-
-        {showGfw && gfwMsg && (
-          <p role="status" className="absolute bottom-3 left-1/2 z-[400] max-w-[60%] -translate-x-1/2 border border-rule bg-paper/90 px-3 py-1.5 text-center text-[11px] text-ink-2">
-            {gfwMsg}
-          </p>
-        )}
-        {scanning && <ScanOverlay job={job} />}
-
-        {/* top centre: the area search */}
-        <div className="z-[500] p-1 md:absolute md:left-1/2 md:top-3 md:max-h-[calc(100%-1.5rem)] md:w-[380px] md:-translate-x-1/2 md:overflow-y-auto md:p-0">
-          <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
-            job={job} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
-            period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
-        </div>
-
-        {/* left: live counts and "Fill this view" */}
-        <div className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:left-3 md:top-3 md:w-[300px] md:p-0 [&>*]:pointer-events-auto">
-          <dl className="grid grid-cols-2 border border-rule bg-paper/90">
+      <section className="relative flex shrink-0 flex-col border-b border-rule md:h-[calc(100vh-48px)] md:max-h-[880px] md:min-h-[540px] md:flex-row">
+        {/* left sidebar: live counts, then the area search */}
+        <aside className="flex shrink-0 flex-col border-rule bg-surface md:w-[360px] md:border-r" aria-label="Area search">
+          <dl className="grid grid-cols-2 border-b border-rule">
             {stats.map(([label, value]) => (
-              <div key={label} className="border-rule px-3 py-2 [&:not(:last-child)]:border-r">
+              <div key={label} className="border-rule px-4 py-3 [&:not(:last-child)]:border-r">
                 <dd className="text-xl font-bold text-ink">{value}</dd>
                 <dt className="mt-0.5 text-[10px] uppercase tracking-wider text-ink-3">{label}</dt>
               </div>
             ))}
           </dl>
-          <VesselApiFill bounds={bounds} feed={feed} onFilled={() => bounds && apiService.getLive(bounds).then(setFeed).catch(() => {})} />
-        </div>
-
-        {/* right: only Filters and Ship search, each opened by its button; the picked ship's card below */}
-        <aside className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:right-3 md:top-3 md:w-[330px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
-          <div className="flex justify-end gap-1">
-            {([['ships', 'Search ship'], ['filters', 'Filters']] as const).map(([id, label]) => (
-              <button key={id} onClick={() => setSide(side === id ? null : id)} aria-expanded={side === id}
-                className={side === id ? 'btn-quiet border-signal bg-paper/90 text-signal' : 'btn-quiet bg-paper/90'}>
-                {label}
-              </button>
-            ))}
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
+            <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
+              job={job} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
+              period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
           </div>
-          {side === 'ships' && <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />}
-          {side === 'filters' && <FilterPanel />}
-          {pickedMmsi && (
-            <VesselCard mmsi={pickedMmsi} initial={allLive.find((x) => x.mmsi === pickedMmsi)}
-              onClose={closeVessel} onLoaded={onVesselLoaded} onSearchHere={searchHere}
-              showTrack={showTrack} onToggleTrack={() => setShowTrack((t) => !t)} />
-          )}
         </aside>
+
+        <div className="relative min-w-0 flex-1">
+          <div className="h-[60vh] md:h-full">
+            <MapComponent live={live} drawing={drawing} box={box} onBox={onBox} scanning={scanning} result={result}
+              onBounds={setBounds} focus={focus} fit={fit} onShip={setOpenShip}
+              onPickVessel={(m) => { setPickedMmsi(m); setShowTrack(false) }}
+              picked={picked?.lat != null ? { lat: picked.lat, lon: picked.lon! } : null}
+              track={showTrack ? picked?.track ?? null : null} mapStyle={mapStyle} gfw={showGfw ? gfw : null} />
+          </div>
+
+          {showGfw && gfwMsg && (
+            <p role="status" className="absolute bottom-3 left-1/2 z-[400] max-w-[60%] -translate-x-1/2 border border-rule bg-paper/90 px-3 py-1.5 text-center text-[11px] text-ink-2">
+              {gfwMsg}
+            </p>
+          )}
+          {scanning && <ScanOverlay job={job} />}
+
+          {/* right: Ship search and Filters, each opened by its button; the picked ship's card below */}
+          <div className="z-[500] space-y-1 p-1 md:pointer-events-none md:absolute md:bottom-3 md:right-3 md:top-3 md:w-[330px] md:overflow-y-auto md:p-0 [&>*]:pointer-events-auto">
+            <div className="flex justify-end gap-1">
+              {([['ships', 'Search ship'], ['filters', 'Filters']] as const).map(([id, label]) => (
+                <button key={id} onClick={() => setSide(side === id ? null : id)} aria-expanded={side === id}
+                  className={side === id ? 'btn-quiet border-signal bg-paper/90 text-signal' : 'btn-quiet bg-paper/90'}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {side === 'ships' && <SearchBox live={live} onFocus={(p) => setFocus({ ...p, zoom: 11 })} onPick={(m) => { setPickedMmsi(m); setShowTrack(false) }} />}
+            {side === 'filters' && <FilterPanel hidden={hiddenGroups} onToggleGroup={toggleGroup} />}
+            {pickedMmsi && (
+              <VesselCard mmsi={pickedMmsi} initial={allLive.find((x) => x.mmsi === pickedMmsi)}
+                onClose={closeVessel} onLoaded={onVesselLoaded} onSearchHere={searchHere}
+                showTrack={showTrack} onToggleTrack={() => setShowTrack((t) => !t)} />
+            )}
+          </div>
+        </div>
       </section>
 
       <main className="grid flex-1 content-start gap-1 bg-paper p-1 lg:grid-cols-3">

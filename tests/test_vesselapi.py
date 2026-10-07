@@ -99,3 +99,12 @@ def test_live_memory_is_capped_oldest_first(monkeypatch):
     finally:
         feeds.ships.clear(); feeds.statics.clear(); feeds.tracks.clear()
         feeds.ships.update(saved[0]); feeds.statics.update(saved[1]); feeds.tracks.update(saved[2])
+
+
+def test_a_filled_ship_has_a_ship_card(monkeypatch):
+    """Clicking a ship that only VesselAPI put on the map must show its position, not 'no AIS'."""
+    monkeypatch.setattr(feeds.requests, "get", lambda *a, **k: Resp([_v(419000123, lat=18.95, lon=72.84)]))
+    feeds.vesselapi_fill(MUMBAI, now=1_000_000)
+    v = feeds.vessel("419000123", now=1_000_060)
+    assert (v["lat"], v["lon"], v["name"]) == (18.95, 72.84, "SHIP 419000123")
+    assert v["flag"]["iso2"] == "IN" and "VesselAPI" in v["source"] and v["track"] == [[18.95, 72.84]]

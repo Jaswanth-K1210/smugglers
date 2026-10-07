@@ -61,6 +61,90 @@ def nearest_gap(lat, lon, t, gaps, max_kn=MAX_KN):
     return {**gaps.loc[i].to_dict(), "km": float(d_km[i]), "hours": float(hours[i])}
 
 
+# ── Ships whose AIS was silent across the pass ───────────────────────────────
+# GFW's published gap events are rare (one in the whole Gulf over three months), so we also
+# read the AIS itself: every ship that reported before the pass, went quiet across it and
+# reported again after, and could have been in the box at the pass time.
+SILENT_H = 12                 # AIS read this far either side of the pass
+SILENT_PAD_DEG = 0.3          # and this far around the box (~33 km); 13-26 s per lookup measured
+QUIET_H = 1.0                 # no report this close to the pass, on either side
+SLACK_KM = 2.0                # GFW presence cells (~1 km) and hour-centred times
+
+
+def ais_around(box, t, hours=SILENT_H, pad=SILENT_PAD_DEG):
+    """GFW hourly AIS presence with identities, ±`hours` around t, in the box widened by `pad`."""
+    w, s, e, n = box
+    d = gfw._report(gfw.PRESENCE, t - pd.Timedelta(hours=hours), t + pd.Timedelta(hours=hours),
+                    (w - pad, s - pad, e + pad, n + pad), "HOURLY", "VESSEL_ID")
+    if d.empty:
+        return d
+    return d.assign(ts=pd.to_datetime(d.date) + pd.Timedelta(minutes=30))
+
+
+def _reach_km(hours, max_kn):
+    return max_kn * 1.852 * (abs(hours) + 0.5) + SLACK_KM        # +0.5 h: times are hour centres
+
+
+def _km_to_box(lat, lon, box):
+    w, s, e, n = box
+    return float(dark_sts._metres_between(lat, lon, min(max(lat, s), n), min(max(lon, w), e))) / 1000
+
+
+def silent_at_pass(rows, t, box, max_kn=MAX_KN, quiet_h=QUIET_H, limit=30):
+    """Ships silent across the pass that could have been inside the box at t, longest silence last.
+
+    Each: key, identity, where and when AIS went quiet ("off") and came back ("on")."""
+    if rows is None or not len(rows):
+        return []
+    out = []
+    for vid, x in rows.groupby("vesselId"):
+        before, after = x[x.ts <= t - pd.Timedelta(hours=quiet_h)], x[x.ts >= t + pd.Timedelta(hours=quiet_h)]
+        if before.empty or after.empty or ((x.ts - t).abs() < pd.Timedelta(hours=quiet_h)).any():
+            continue
+        off, on = before.loc[before.ts.idxmax()], after.loc[after.ts.idxmin()]
+        h_off, h_on = (t - off.ts).total_seconds() / 3600, (on.ts - t).total_seconds() / 3600
+        if (_km_to_box(off.lat, off.lon, box) > _reach_km(h_off, max_kn) or
+                _km_to_box(on.lat, on.lon, box) > _reach_km(h_on, max_kn)):
+            continue
+        val = lambda c: None if c not in off or off[c] != off[c] or off[c] in ("", None) else off[c]
+        imo = val("imo")
+        out.append({"key": str(vid), "mmsi": None if val("mmsi") is None else str(val("mmsi")),
+                    "name": val("shipName"), "flag": val("flag"), "imo": str(imo) if imo else None,
+                    "callsign": val("callsign"), "type": (val("vesselType") or "").replace("_", " ").lower() or None,
+                    "off": {"time": off.ts.isoformat() + "Z", "lat": round(float(off.lat), 4), "lon": round(float(off.lon), 4),
+                            "hours_before": round(h_off, 1)},
+                    "on": {"time": on.ts.isoformat() + "Z", "lat": round(float(on.lat), 4), "lon": round(float(on.lon), 4),
+                           "hours_after": round(h_on, 1)},
+                    "silent_h": round(h_off + h_on, 1), "could_be": []})
+    return sorted(out, key=lambda r: r["silent_h"])[:limit]
+
+
+def could_be(lat, lon, t, silent, max_kn=MAX_KN):
+    """Keys of the silent ships that could be the radar ship at (lat, lon), nearest detour first."""
+    hits = []
+    for r in silent:
+        a = float(dark_sts._metres_between(r["off"]["lat"], r["off"]["lon"], lat, lon)) / 1000
+        b = float(dark_sts._metres_between(lat, lon, r["on"]["lat"], r["on"]["lon"])) / 1000
+        if a <= _reach_km(r["off"]["hours_before"], max_kn) and b <= _reach_km(r["on"]["hours_after"], max_kn):
+            hits.append((a + b, r["key"]))
+    return [k for _, k in sorted(hits)]
+
+
+def link_silent(result):
+    """Fill each silent ship's could_be with the ids of the radar ships that list it."""
+    for r in result.get("ais_silent") or []:
+        r["could_be"] = [s["id"] for s in result["ships"] if r["key"] in (s.get("ais_silent_match") or [])]
+    return result
+
+
+def silent_reason(r):
+    who = r["name"] or (f"MMSI {r['mmsi']}" if r["mmsi"] else "An unnamed ship")
+    extra = ", ".join(v for v in (r.get("flag"), f"IMO {r['imo']}" if r.get("imo") else None, r.get("type")) if v)
+    return (f"{who}{f' ({extra})' if extra else ''} stopped reporting AIS {r['off']['hours_before']:.0f} h before "
+            f"this pass and reappeared {r['on']['hours_after']:.0f} h after; at up to {MAX_KN} kn it could have been "
+            f"here at the pass. A possible match, not proof: AIS also drops out through poor reception.")
+
+
 def gap_reason(g):
     who = g["name"] or f"MMSI {g['mmsi']}"
     flag = f", {g['flag']}" if g.get("flag") else ""

@@ -39,7 +39,7 @@ NOT_AVAILABLE = "AIS_NOT_AVAILABLE"
 # outside the headline counts, until per-band precision from human review (test plan T3)
 # shows whether they hold >= 0.80.
 SHIP_CONF, WEAK_CONF = 0.25, 0.15
-CACHE_VERSION = 3             # bump when results change, so stale cached searches are not served
+CACHE_VERSION = 4             # bump when results change, so stale cached searches are not served
 
 
 RECUR_M = 300                 # same spot on two passes: likely a fixed structure or a ship at anchor
@@ -114,6 +114,8 @@ def evidence(ship, sts_note=None, gap=None, cover=None):
         tags.append("hull_alongside")
     if gap:
         tags.append("nearby_ais_gap")
+    if ship.get("ais_silent_match") and (cover is None or cover.get("label") in ("good", "fair")):
+        tags.append("ais_silent_ship_could_be_it")     # with poor coverage, silence is mostly reception
     return tags
 
 
@@ -299,6 +301,14 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
                     if s.tier == "A" else f"Another hull {s.spacing_m:.0f} m away (within 500 m).")
             for i in res.index[hunt.near(s.lat, s.lon, res.lat, res.lon) <= max(s.spacing_m, 50) / 2 + 30]:
                 notes[i] = note
+        silent = []
+        if ais_ok:
+            progress("Looking for ships whose AIS was silent at the pass", 0.96)
+            try:
+                silent = context.silent_at_pass(context.ais_around(box, t), t, box)
+            except Exception:
+                silent = []           # context failing must not fail the search
+        result["ais_silent"] = silent
         gaps = None
         if ais_ok and (res.category == dark_sts.AIS_UNMATCHED).any():
             progress("Looking for nearby AIS gap events and maritime zones", 0.97)
@@ -342,6 +352,12 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
                 ship["reasons"].insert(0, f"Weak candidate: detector score {ship['conf']:.2f} is below "
                                           f"{SHIP_CONF:.2f}. Hidden by default; how often scores this low are "
                                           "real ships has not been measured yet.")
+            ship["ais_silent_match"] = context.could_be(r.lat, r.lon, t, silent)[:3] if unmatched else []
+            if ship["ais_silent_match"]:
+                best = next(x for x in silent if x["key"] == ship["ais_silent_match"][0])
+                more = len(ship["ais_silent_match"]) - 1
+                ship["reasons"].insert(-1, context.silent_reason(best) +
+                                       (f" {more} other silent ship{'s' if more > 1 else ''} could also be it." if more else ""))
             ship["evidence"] = evidence(ship, notes.get(i), gap, cover)
             ship["evidence_points"] = len(ship["evidence"])
             ship["zone"] = zone
@@ -350,6 +366,7 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
                 "km": round(gap["km"], 1), "hours_before_pass": round(gap["hours"], 1)}
             ship["chip_png"] = chip_png(tif, r.x, r.y) if n < CHIPS else None
             result["ships"].append(ship)
+        context.link_silent(result)
         result["sts"] = [{"lat": round(float(s.lat), 5), "lon": round(float(s.lon), 5),
                           "tier": s.tier, "spacing_m": int(s.spacing_m), "radar_hulls": int(s.n_radar),
                           "ais_identities": int(s.n_ais) if ais_ok else None,
@@ -409,7 +426,9 @@ def merge_cells(parts, cores):
            "ais_available": next((p["ais_available"] for p, _ in ok if p.get("ais_available")),
                                  ok[0][0].get("ais_available")),
            "cached": all(p.get("cached") for p, _ in ok),
-           "cells": len(parts), "cells_failed": len(parts) - len(ok)}
+           "cells": len(parts), "cells_failed": len(parts) - len(ok),
+           "ais_silent": list({r["key"]: r for p, _ in ok for r in p.get("ais_silent") or []}.values())}
+    context.link_silent(out)
     if len(ok) < len(parts):
         failed = "; ".join(sorted({p["error"] for p in parts if "error" in p}))
         out["scene_note"] = " ".join(filter(None, [out.get("scene_note"), f"{len(parts) - len(ok)} of {len(parts)} "

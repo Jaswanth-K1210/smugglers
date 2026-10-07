@@ -1,7 +1,7 @@
 import React from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
 import { apiService, isFailedPass, passesOf } from '../services/api'
-import type { BBox, SearchEstimate, SearchJob, SearchShip } from '../services/api'
+import type { AisSilentShip, BBox, SearchEstimate, SearchJob, SearchShip } from '../services/api'
 import { STATUS } from '../status'
 import { Panel } from './Panel'
 
@@ -113,6 +113,54 @@ export const SearchLog: React.FC<{ job: SearchJob | null; stages: string[] }> = 
     {job?.status === 'error' && <p role="alert" className="mt-2 text-xs text-unmatched">{job.error}</p>}
   </Panel>
 )
+
+/** Ships whose AIS was silent across this pass and that could have been in the area. */
+const SilentAis: React.FC<{ ships: AisSilentShip[]; passTime: string; onShip: (id: number) => void }> = ({ ships, passTime, onShip }) => {
+  const linked = ships.filter((r) => r.could_be.length).length
+  const recent = Date.now() - Date.parse(passTime) < 5 * 86400000
+  return (
+    <details className="border border-rule px-2 py-1.5 text-[11px]" open={linked > 0}>
+      <summary className="cursor-pointer text-ink-2">
+        AIS silent at this pass: <span className="text-[#B98CFF]">{ships.length} ship{ships.length === 1 ? '' : 's'}</span>
+        {linked ? `, ${linked} could be a ship found here` : ''}
+      </summary>
+      <p className="mt-1 text-ink-3">
+        Reported AIS before the pass, went silent across it and reported again after, and could have been in this
+        area at the pass time (at up to 15 kn). On the map: hollow circle where AIS stopped, filled circle where it
+        came back. AIS also drops out through poor reception, so each one is a lead, not proof.
+        {recent && ' This pass is recent: AIS after it may not be published yet (Global Fishing Watch runs 3–5 days behind).'}
+      </p>
+      {ships.length ? (
+        <ul className="mt-1 max-h-56 space-y-1.5 overflow-y-auto">
+          {[...ships].sort((a, b) => b.could_be.length - a.could_be.length || a.silent_h - b.silent_h).map((r) => (
+            <li key={r.key} className="border-t border-rule pt-1.5 first:border-t-0 first:pt-0">
+              <p className="text-ink">
+                {r.mmsi ? (
+                  <a className="hover:underline" target="_blank" rel="noreferrer"
+                    href={`https://www.marinetraffic.com/en/ais/details/ships/mmsi:${r.mmsi}`}>{r.name ?? `MMSI ${r.mmsi}`} ↗</a>
+                ) : (r.name ?? 'Unnamed ship')}
+                <span className="text-ink-3"> {[r.flag, r.type, r.imo && `IMO ${r.imo}`, r.mmsi && `MMSI ${r.mmsi}`].filter(Boolean).join(' · ')}</span>
+              </p>
+              <p className="text-ink-2">
+                Off {r.off.hours_before} h before ({r.off.lat.toFixed(3)}, {r.off.lon.toFixed(3)}) · on {r.on.hours_after} h after
+                ({r.on.lat.toFixed(3)}, {r.on.lon.toFixed(3)}) · silent {r.silent_h} h
+              </p>
+              {r.could_be.length > 0 && (
+                <p className="text-ink-2">Could be{' '}
+                  {r.could_be.map((id) => (
+                    <button key={id} onClick={() => onShip(id)} className="mr-1 text-[#B98CFF] underline">ship {id + 1}</button>
+                  ))}
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-ink-3">No ship went silent across this pass near this area.</p>
+      )}
+    </details>
+  )
+}
 
 const ShipRow: React.FC<{ ship: SearchShip; open: boolean; onToggle: () => void }> = ({ ship, open, onToggle }) => {
   const cat = CATEGORY[ship.category] ?? { label: ship.category, color: '#E8E8E8' }
@@ -324,6 +372,7 @@ export const AreaSearch: React.FC<{
             {result.scene.platform ?? 'Sentinel-1'} pass of {new Date(result.scene.time).toUTCString().slice(5, 22)} UTC
             {result.cached ? ', from an earlier search.' : '.'} {result.scene_note}
           </p>
+          {result.ais_silent && <SilentAis ships={result.ais_silent} passTime={result.scene.time} onShip={onShip} />}
           {nWeak > 0 && (
             <label className="flex items-start gap-2 text-[11px] text-ink-2">
               <input type="checkbox" checked={showWeak} onChange={(e) => setShowWeak(e.target.checked)} className="mt-0.5" />

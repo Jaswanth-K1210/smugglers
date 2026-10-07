@@ -75,9 +75,9 @@ Today the search uses the newest pass over the box that already has AIS. With a 
    is one **unit** of work.
 3. Before Go, `POST /api/search/estimate` returns passes, cells, units, minutes and
    about how much Modal credit it uses (~$0.004 a unit); the website shows it. The only
-   ceilings are on work, not shape: `SEARCH_MAX_UNITS` per search (default 200, ~1.4 h)
+   ceilings are on work, not shape: `SEARCH_MAX_UNITS` per search (default 200, ~1.6 h)
    and `SEARCH_DAILY_UNITS` per account per day (default 400). Example: a 145 x 166 km
-   box over 30 days in the Gulf is 18 passes, 142 units, about an hour, ~$0.51.
+   box over 30 days in the Gulf is 18 passes, 142 units, about 70 minutes, ~$0.58.
 4. Each unit runs `search_pass` on its cell grown by 0.6 km, 4 in parallel (`search.run_pass`,
    the same logic as the single-pass search). `search.merge_cells` keeps each ship and
    pair only from the cell whose core contains it, so a hull on a cell edge counts once.

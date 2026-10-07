@@ -5,6 +5,8 @@ import { useDashboardStore } from '../store/dashboardStore'
 import { STATUS, STATUS_ORDER } from '../status'
 import type { BBox, GfwLayers, LiveVessel, SearchResult } from '../services/api'
 
+const SILENT = '#B98CFF'      // ships whose AIS was silent across the pass
+
 const SEARCH_COLORS: Record<string, string> = {
   AIS_VISIBLE: STATUS.AIS_VISIBLE.color,
   AIS_PARTIAL: STATUS.AIS_PARTIAL.color,
@@ -277,6 +279,18 @@ export const MapComponent: React.FC<{
           </CircleMarker>
         ))}
 
+        {result?.ais_silent?.map((r) => (   // AIS went quiet here before the pass and came back there after
+          <React.Fragment key={`silent-${r.key}`}>
+            <Polyline positions={[[r.off.lat, r.off.lon], [r.on.lat, r.on.lon]]}
+              pathOptions={{ color: SILENT, weight: 1.5, dashArray: '4 5', opacity: 0.8 }} />
+            <CircleMarker center={[r.off.lat, r.off.lon]} radius={5} pathOptions={{ color: SILENT, weight: 2, fill: false }}>
+              <Tooltip>{r.name ?? `MMSI ${r.mmsi ?? '?'}`}: AIS went silent here {r.off.hours_before} h before the pass</Tooltip>
+            </CircleMarker>
+            <CircleMarker center={[r.on.lat, r.on.lon]} radius={5} pathOptions={{ color: SILENT, weight: 2, fillColor: SILENT, fillOpacity: 0.9 }}>
+              <Tooltip>{r.name ?? `MMSI ${r.mmsi ?? '?'}`}: AIS back on here {r.on.hours_after} h after the pass{r.could_be.length ? ` / could be radar ship ${r.could_be.map((i) => i + 1).join(', ')}` : ''}</Tooltip>
+            </CircleMarker>
+          </React.Fragment>
+        ))}
         {result?.sts.map((s, i) => (
           <CircleMarker key={`sts-${i}`} center={[s.lat, s.lon]} radius={14}
             pathOptions={{ color: '#44FF88', weight: 1.5, dashArray: '3 3', fill: false }}>

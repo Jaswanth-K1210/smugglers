@@ -256,6 +256,10 @@ def vessel(mmsi: str, now=None):
     pos, st = ships.get(key), statics.get(key)
     if st and now - st["t"] > STALE_S + STATIC_TTL:
         st = None
+    va = None if pos else vesselapi_rows.get(str(key))
+    if va:                                       # on the map from "Fill this view" only (e.g. India)
+        pos = {**{k: va[k] for k in ("name", "lat", "lon", "sog", "cog", "heading")}, "t": va["reported"],
+               "source": "vesselapi"}
     if not pos and not st:
         return None
     out = {"mmsi": str(key), **{k: v for k, v in (pos or {}).items() if k not in ("t", "mmsi", "mmsi_int", "nav_status", "source")}}
@@ -272,6 +276,8 @@ def vessel(mmsi: str, now=None):
     if src.startswith("openwaters:"):
         from src.openwaters import credit
         out["source"] = credit(src.split(":", 1)[1])
+    elif src == "vesselapi":
+        out["source"] = "VesselAPI (fetched on request; position only, no destination)"
     else:
         out["source"] = "aisstream.io, terrestrial"
     tr = tracks.get(key)

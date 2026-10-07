@@ -21,9 +21,9 @@ EDGE_KM = 0.6                  # each cell is searched this far past its edge: a
 SLICE_GAP_S = 120              # STAC items of one pass are slices ~25 s apart; passes are hours apart
 MIN_COVER = 0.5                # a pass must cover at least half a cell, by its real footprint
 PARALLEL = 4                   # units run at once (GFW and Planetary Computer rate-limit wider)
-UNIT_S = 100                   # measured: one 30-50 km pass takes 52-99 s on 2 CPUs
-UNIT_USD = 0.0036              # 2 CPU x 100 s + 4 GiB x 100 s at Modal's published rates
-MAX_UNITS = int(os.getenv("SEARCH_MAX_UNITS", 200))   # ~$0.70 and ~1.4 h at the ceiling
+UNIT_S = 115                   # measured 52-99 s per 30-50 km pass on 2 CPUs, + ~15 s for the silent-AIS lookup
+UNIT_USD = 0.0041              # 2 CPU + 4 GiB for 115 s at Modal's published rates
+MAX_UNITS = int(os.getenv("SEARCH_MAX_UNITS", 200))   # ~$0.82 and ~1.6 h at the ceiling
 
 
 def km(box):

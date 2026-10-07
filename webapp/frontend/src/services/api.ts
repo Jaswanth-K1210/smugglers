@@ -147,6 +147,23 @@ export interface SearchShip {
   coverage?: string
   weak?: boolean            // detector score below the ship threshold (0.25); hidden by default
   recurring_passes?: number // period search: AIS-unmatched at this spot on this many passes
+  ais_silent_match?: string[] // keys of AisSilentShip that could be this ship, nearest first
+}
+
+/** A ship that reported AIS before the pass, was silent across it, reported again after, and could
+ * have been in the searched area at the pass time (src/context.py silent_at_pass). */
+export interface AisSilentShip {
+  key: string
+  mmsi: string | null
+  name: string | null
+  flag: string | null
+  imo: string | null
+  callsign: string | null
+  type: string | null
+  off: { time: string; lat: number; lon: number; hours_before: number }
+  on: { time: string; lat: number; lon: number; hours_after: number }
+  silent_h: number
+  could_be: number[]        // ids of radar ships in this pass it could be
 }
 
 export interface SearchResult {
@@ -162,6 +179,7 @@ export interface SearchResult {
   coverage?: Coverage
   ais_source?: string
   ais_available?: boolean | null
+  ais_silent?: AisSilentShip[]
   note: string
 }
 

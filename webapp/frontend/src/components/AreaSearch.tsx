@@ -1,7 +1,7 @@
 import React from 'react'
 import { useDashboardStore } from '../store/dashboardStore'
 import { apiService, isFailedPass, passesOf } from '../services/api'
-import type { AisSilentShip, BBox, SearchEstimate, SearchJob, SearchShip } from '../services/api'
+import type { AisSilentShip, BBox, SearchEstimate, SearchJob, SearchResult, SearchShip } from '../services/api'
 import { STATUS } from '../status'
 import { Panel } from './Panel'
 
@@ -218,7 +218,8 @@ export const AreaSearch: React.FC<{
   pass: number
   onPass: (i: number) => void
   onBox: (b: BBox) => void
-}> = ({ drawing, onDraw, box, onClear, onGo, job, openShip, onShip, period, onPeriod, periodSearch, pass, onPass, onBox }) => {
+  onPassUpdated?: (i: number, p: SearchResult) => void   // a saved pass gained its silent-AIS list
+}> = ({ drawing, onDraw, box, onClear, onGo, job, openShip, onShip, period, onPeriod, periodSearch, pass, onPass, onBox, onPassUpdated }) => {
   const [w, h] = box ? boxKm(box) : [0, 0]
   const tooBig = !!box && !periodSearch && Math.max(w, h) > MAX_KM
   const sizeError = box && Math.min(w, h) < MIN_KM
@@ -230,6 +231,17 @@ export const AreaSearch: React.FC<{
   const isPeriod = !!full && 'passes' in full
   const selected = passes[pass]
   const result = selected && !isFailedPass(selected) ? selected : undefined
+  // A search saved before the silent-AIS check existed gets it when one of its passes is opened.
+  const [silentCheck, setSilentCheck] = React.useState<{ key: string; error?: string } | null>(null)
+  const needsSilent = !!(result && job?.job_id && result.ais_available && result.ais_silent === undefined && !result.ais_silent_note)
+  const checkKey = `${job?.job_id}:${pass}`
+  React.useEffect(() => {
+    if (!needsSilent || !job?.job_id || silentCheck?.key === checkKey) return
+    setSilentCheck({ key: checkKey })
+    apiService.checkSilent(job.job_id, pass)
+      .then((p) => onPassUpdated?.(pass, p))
+      .catch((e) => setSilentCheck({ key: checkKey, error: e instanceof Error ? e.message : 'The check failed.' }))
+  }, [needsSilent, checkKey])   // once per pass
   const dateError = periodSearch ? periodError(period) : null
   const showWeak = useDashboardStore((s) => s.showWeak)
   const setShowWeak = useDashboardStore((s) => s.setShowWeak)
@@ -301,6 +313,9 @@ export const AreaSearch: React.FC<{
         </>
       )}
 
+      {job?.status === 'done' && !full && (
+        <p role="alert" className="text-xs text-partial">{job.result_missing ?? 'This search has no saved results.'}</p>
+      )}
       {busy && (
         <div className="space-y-2" role="status">
           <p className="text-xs text-ink">{job?.stage || 'Sending the box'}</p>
@@ -373,6 +388,12 @@ export const AreaSearch: React.FC<{
             {result.cached ? ', from an earlier search.' : '.'} {result.scene_note}
           </p>
           {result.ais_silent && <SilentAis ships={result.ais_silent} passTime={result.scene.time} onShip={onShip} />}
+          {needsSilent && silentCheck?.key === checkKey && (
+            <p role="status" className="text-[11px] text-ink-3">
+              {silentCheck.error ? `Ships with silent AIS could not be checked: ${silentCheck.error}`
+                : 'Checking which ships had their AIS silent at this pass (about 30 s, once per pass)…'}
+            </p>
+          )}
           {result.ais_silent_note && <p className="text-[11px] text-partial">{result.ais_silent_note}</p>}
           {nWeak > 0 && (
             <label className="flex items-start gap-2 text-[11px] text-ink-2">

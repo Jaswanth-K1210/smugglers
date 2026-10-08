@@ -557,7 +557,58 @@ def search_status(job_id: str, user: dict = Depends(current_user)):
         raise HTTPException(404, "No such search. It may have expired after a restart.")
     if job.get("mode") == "worker" and job["status"] == "running":
         return _worker_status(job)
+    if job.get("mode") == "worker" and job["status"] == "done" and not job.get("result") and job.get("call_id"):
+        # finished before results were saved: the worker still holds the result for a while
+        try:
+            res = worker.result(job["call_id"])
+        except Exception:
+            res = None
+        if res is not None:
+            _set(job_id, **_saved(res))
+            job = _searches().get(job_id)
+        else:
+            job = {**job, "result_missing": "This search finished before results were saved, and the search "
+                                            "service no longer has them. Run it again to see its ships."}
     return {k: v for k, v in job.items() if k not in ("user", "call_id")}
+
+
+@app.post("/api/search/{job_id}/pass/{k}/silent")
+def pass_silent(job_id: str, k: int, user: dict = Depends(current_user)):
+    """Ships whose AIS was silent across pass k of a saved search, for searches run before that
+    check existed; computed once (GFW AIS presence, ~15-30 s) and kept with the search."""
+    import pandas as pd
+    from src import context, dark_sts
+    job = _searches().get(job_id)
+    if not job or job["user"] != user["email"]:
+        raise HTTPException(404, "No such search.")
+    res = job.get("result")
+    passes = (res or {}).get("passes") if res and "passes" in res else ([res] if res else [])
+    if not 0 <= k < len(passes) or "error" in passes[k]:
+        raise HTTPException(404, "No such pass in this search.")
+    p = passes[k]
+    if "ais_silent" in p:
+        return p
+    if not p.get("ais_available"):
+        p["ais_silent_note"] = "No AIS was available for this pass, so ships with silent AIS cannot be found."
+    else:
+        t = pd.Timestamp(p["scene"]["time"]).tz_convert(None) if pd.Timestamp(p["scene"]["time"]).tzinfo \
+            else pd.Timestamp(p["scene"]["time"])
+        box = tuple(p.get("bbox") or job["bbox"])
+        try:
+            silent = context.silent_at_pass(context.ais_around(box, t), t, box)
+        except Exception:
+            raise HTTPException(503, "Global Fishing Watch did not answer. Try again in a minute.")
+        p["ais_silent"] = silent
+        p.pop("ais_silent_note", None)
+        for sh in p.get("ships") or []:
+            if sh["category"] == dark_sts.AIS_UNMATCHED and not sh.get("weak"):
+                sh["ais_silent_match"] = context.could_be(sh["lat"], sh["lon"], t, silent)[:3]
+                if sh["ais_silent_match"]:
+                    best = next(x for x in silent if x["key"] == sh["ais_silent_match"][0])
+                    sh["reasons"] = (sh.get("reasons") or [])[:-1] + [context.silent_reason(best)] + (sh.get("reasons") or [])[-1:]
+        context.link_silent(p)
+    _set(job_id, result=res)
+    return p
 
 
 # ── Live context: AIS positions (aisstream.io) and sanctions news ─────────────

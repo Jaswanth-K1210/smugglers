@@ -225,7 +225,12 @@ export const Dashboard: React.FC = () => {
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
             <AreaSearch drawing={drawing} onDraw={() => setDrawing(!drawing)} box={box} onClear={clear} onGo={go}
               job={job} openShip={openShip} onShip={setOpenShip} onBox={(b) => { onBox(b); setFit(b) }}
-              period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass} />
+              period={period} onPeriod={setPeriod} periodSearch={periodSearch} pass={pass} onPass={setPass}
+              onPassUpdated={(i, p) => setJob((j) => {
+                const r = j?.result
+                if (!j || !r) return j
+                return { ...j, result: 'passes' in r ? { ...r, passes: r.passes.map((q, n) => (n === i ? p : q)) } : p }
+              })} />
           </div>
         </aside>
 

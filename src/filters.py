@@ -13,7 +13,6 @@ The mask is global_land_mask's bundled 30 arcsec grid — about 900 m, offline,
 no download and no API key.
 """
 import numpy as np
-from global_land_mask import globe
 
 EARTH_KM_PER_DEG = 111.32
 
@@ -25,6 +24,7 @@ EARTH_KM_PER_DEG = 111.32
 
 def is_land(lat, lon):
     """Elementwise land test. Accepts scalars or arrays."""
+    from global_land_mask import globe   # loaded on first use: the web server never needs it
     return globe.is_land(np.asarray(lat, dtype=float), np.asarray(lon, dtype=float))
 
 

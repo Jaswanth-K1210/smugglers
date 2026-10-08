@@ -257,6 +257,7 @@ export interface SearchJob {
   error?: string
   result?: SearchResult | PeriodResult
   bbox?: BBox                       // a reopened search carries its box
+  result_missing?: string           // finished before results were saved, and no longer recoverable
   stages?: string[]                 // period search: one line per pass
   passes?: number
   passes_found?: number | null
@@ -446,6 +447,11 @@ export const apiService = {
 
   async getMySearches(): Promise<MySearches> {
     return (await api.get('/searches', { timeout: 60000 })).data
+  },
+
+  /** Ships whose AIS was silent across pass k of a saved search (searches run before that check existed). */
+  async checkSilent(jobId: string, k: number): Promise<SearchResult> {
+    return (await api.post(`/search/${jobId}/pass/${k}/silent`, null, { timeout: 90000 })).data
   },
 
   async getSearch(jobId: string): Promise<SearchJob> {

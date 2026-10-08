@@ -171,3 +171,35 @@ def test_my_searches_lists_and_reopens_finished_results(worker_mode, mongo):
     other = _signed_in(TestClient(backend.app), "o@example.org")
     assert other.get("/api/searches").json()["searches"] == []                    # only your own
     assert other.get(f"/api/search/{job}").status_code == 404
+
+
+def test_old_search_without_saved_result_is_recovered_or_explained(worker_mode, mongo, monkeypatch):
+    c = _signed_in(TestClient(backend.app))
+    job = c.post("/api/search", json={"bbox": BOX}).json()["job_id"]
+    mongo["searches"].update_one({"job_id": job}, {"$set": {"status": "done"}})       # finished before saving existed
+    worker_mode["result"] = {"passes": [], "passes_searched": 2, "counts": {"ships": 9, "ais_unmatched": 2}}
+    got = c.get(f"/api/search/{job}").json()
+    assert got["result"]["counts"]["ships"] == 9 and mongo["searches"].find_one({"job_id": job})["summary"]["ships"] == 9
+    mongo["searches"].update_one({"job_id": job}, {"$unset": {"result": ""}})
+    monkeypatch.setattr(backend.worker, "result", lambda call: (_ for _ in ()).throw(RuntimeError("expired")))
+    assert "Run it again" in c.get(f"/api/search/{job}").json()["result_missing"]
+
+
+def test_silent_ais_is_added_to_an_old_saved_pass(worker_mode, mongo, monkeypatch):
+    import pandas as pd
+    from src import context
+    c = _signed_in(TestClient(backend.app))
+    job = c.post("/api/search", json={"bbox": BOX}).json()["job_id"]
+    ship = {"id": 0, "lat": 25.2, "lon": 56.5, "category": "AIS_UNMATCHED", "weak": False, "reasons": ["a", "score"]}
+    p = {"scene": {"id": "S", "time": "2026-09-25T14:16:00Z"}, "bbox": BOX, "ais_available": True, "ships": [ship], "sts": []}
+    mongo["searches"].update_one({"job_id": job}, {"$set": {"status": "done", "result": {"passes": [p]}}})
+    t = pd.Timestamp("2026-09-25 14:16")
+    rows = pd.DataFrame([{"vesselId": "v", "shipName": "QUIET", "mmsi": "1", "flag": "PAN", "imo": None, "callsign": None,
+                          "vesselType": "CARRIER", "lat": la, "lon": lo, "ts": t + pd.Timedelta(hours=h)}
+                         for h, la, lo in [(-4, 25.2, 56.2), (3, 25.25, 56.8)]])
+    calls = []
+    monkeypatch.setattr(context, "ais_around", lambda box, tt: calls.append(tt) or rows)
+    out = c.post(f"/api/search/{job}/pass/0/silent").json()
+    assert [r["name"] for r in out["ais_silent"]] == ["QUIET"] and out["ais_silent"][0]["could_be"] == [0]
+    assert "QUIET" in out["ships"][0]["reasons"][-2] and out["ships"][0]["reasons"][-1] == "score"
+    assert c.post(f"/api/search/{job}/pass/0/silent").json()["ais_silent"] and len(calls) == 1   # kept, not recomputed

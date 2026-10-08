@@ -3,6 +3,7 @@ import { useDashboardStore } from '../store/dashboardStore'
 import { apiService, isFailedPass, passesOf } from '../services/api'
 import type { AisSilentShip, BBox, SearchEstimate, SearchJob, SearchResult, SearchShip } from '../services/api'
 import { STATUS } from '../status'
+import { guessIdentity } from '../identity'
 import { Panel } from './Panel'
 
 // Mirrors src/limits.py: one 1024 px tile at minimum; the maximum is for one-pass (local) searches only,
@@ -162,13 +163,17 @@ const SilentAis: React.FC<{ ships: AisSilentShip[]; passTime: string; onShip: (i
   )
 }
 
-const ShipRow: React.FC<{ ship: SearchShip; open: boolean; onToggle: () => void }> = ({ ship, open, onToggle }) => {
+const ShipRow: React.FC<{ ship: SearchShip; open: boolean; onToggle: () => void; silent?: AisSilentShip[] }> = ({ ship, open, onToggle, silent }) => {
   const cat = CATEGORY[ship.category] ?? { label: ship.category, color: '#E8E8E8' }
+  const guess = guessIdentity(ship, silent)
   return (
     <li className="border-t border-rule first:border-t-0">
       <button onClick={onToggle} aria-expanded={open} className="flex w-full items-center gap-2 py-2 text-left hover:bg-white/[0.03]">
         <span className="h-2 w-2 shrink-0" style={{ background: cat.color }} />
-        <span className="flex-1 text-xs text-ink">Ship {ship.id + 1}</span>
+        <span className="min-w-0 flex-1 text-xs text-ink">
+          Ship {ship.id + 1}
+          {guess && <span className="block truncate text-[11px] text-[#B98CFF]" title="A guess from AIS evidence, not an identification">possibly {guess.name}?</span>}
+        </span>
         {!!ship.recurring_passes && (
           <span className="text-[10px] text-partial" title="AIS-unmatched at this spot on several passes: likely a fixed structure or a ship at anchor">
             seen on {ship.recurring_passes} passes
@@ -184,6 +189,23 @@ const ShipRow: React.FC<{ ship: SearchShip; open: boolean; onToggle: () => void 
               className="h-20 w-20 shrink-0 border border-rule [image-rendering:pixelated]" />
           )}
           <ul className="space-y-1 text-[11px] leading-snug text-ink-2">
+            {guess && (
+              <li className="border border-[#B98CFF]/40 px-2 py-1.5">
+                <span className="block text-[10px] uppercase tracking-wider text-[#B98CFF]">
+                  Possible identity{guess.strength === 'stronger' ? ' (position and size fit)' : ''}
+                </span>
+                <span className="block text-ink">
+                  {guess.mmsi ? (
+                    <a className="hover:underline" target="_blank" rel="noreferrer"
+                      href={`https://www.marinetraffic.com/en/ais/details/ships/mmsi:${guess.mmsi}`}>{guess.name} ↗</a>
+                  ) : guess.name}
+                  {guess.detail && <span className="text-ink-3"> {guess.detail}</span>}
+                </span>
+                <span className="block">{guess.basis}</span>
+                {guess.others.length > 0 && <span className="block text-ink-3">Other possibilities: {guess.others.join(', ')}.</span>}
+                <span className="block text-ink-3">A guess from AIS evidence, not an identification.</span>
+              </li>
+            )}
             {ship.reasons.map((r) => <li key={r}>{r}</li>)}
             {!!ship.ais_candidates?.length && (
               <li className="pt-1 text-ink-3">
@@ -407,7 +429,7 @@ export const AreaSearch: React.FC<{
           {ships.length ? (
             <ul className="max-h-72 overflow-y-auto">
               {ships.map((s) => (
-                <ShipRow key={s.id} ship={s} open={openShip === s.id} onToggle={() => onShip(openShip === s.id ? null : s.id)} />
+                <ShipRow key={s.id} ship={s} silent={result.ais_silent} open={openShip === s.id} onToggle={() => onShip(openShip === s.id ? null : s.id)} />
               ))}
             </ul>
           ) : (

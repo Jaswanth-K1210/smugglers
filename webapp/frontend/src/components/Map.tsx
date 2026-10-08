@@ -3,6 +3,7 @@ import { MapContainer, TileLayer, CircleMarker, Tooltip, ZoomControl, Rectangle,
 import L from 'leaflet'
 import { useDashboardStore } from '../store/dashboardStore'
 import { STATUS } from '../status'
+import { guessIdentity } from '../identity'
 import type { BBox, GfwLayers, LiveVessel, SearchResult } from '../services/api'
 
 const SILENT = '#B98CFF'      // ships whose AIS was silent across the pass
@@ -304,7 +305,10 @@ export const MapComponent: React.FC<{
           <CircleMarker key={`ship-${s.id}`} center={[s.lat, s.lon]} radius={s.weak ? 4 : 6}
             pathOptions={{ color: '#0A0A0A', weight: 1.5, fillColor: SEARCH_COLORS[s.category] ?? '#E8E8E8', fillOpacity: s.weak ? 0.45 : 1, dashArray: s.weak ? '2 2' : undefined }}
             eventHandlers={{ click: () => onShip(s.id) }}>
-            <Tooltip>Radar ship {s.id + 1} / ≈{s.length_m} m / {s.category.replace(/_/g, ' ').toLowerCase()}</Tooltip>
+            <Tooltip>
+              Radar ship {s.id + 1} / ≈{s.length_m} m / {s.category.replace(/_/g, ' ').toLowerCase()}
+              {(() => { const g = guessIdentity(s, result.ais_silent); return g ? ` / possibly ${g.name}?` : '' })()}
+            </Tooltip>
           </CircleMarker>
         ))}
       </MapContainer>

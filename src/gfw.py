@@ -72,7 +72,9 @@ def ais_presence(start, end, box):
         return pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"])
     return pd.DataFrame({"mmsi": d.vesselId.where(d.vesselId != "", d.mmsi),
                          "lat": d.lat, "lon": d.lon,
-                         "timestamp": pd.to_datetime(d.date) + pd.Timedelta(minutes=30)})
+                         "timestamp": pd.to_datetime(d.date) + pd.Timedelta(minutes=30),
+                         # identity, for naming a candidate (the id above is GFW's vessel id, not the MMSI)
+                         "name": d.get("shipName"), "ssvid": d.get("mmsi"), "flag": d.get("flag")})
 
 
 def sar_unmatched(day, box):

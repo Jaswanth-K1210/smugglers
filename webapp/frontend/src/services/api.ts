@@ -109,6 +109,8 @@ export interface AisCandidate {
   ais_length_m: number | null
   size: 'consistent' | 'mismatch' | null
   plausible: boolean
+  mmsi?: string | null      // the real MMSI when known (GFW's own vessel id is in `id`)
+  flag?: string | null
 }
 
 export interface Coverage { score: number; label: 'good' | 'fair' | 'poor' | 'none'; factors: string[] }

@@ -74,7 +74,10 @@ def candidates(lat, lon, t, ais, length_m=None, source=None, max_km=15, window_m
             size = "consistent" if 0.6 <= ratio <= 1.6 else "mismatch"   # SAR hull length is ±30 % at 10 m pixels
         plausible = dist <= tol and (need_kn <= MAX_KN or raw <= BASE_TOL_M)
         name = getattr(r, "name", None)
+        ssvid, flag = getattr(r, "ssvid", None), getattr(r, "flag", None)
+        mmsi = str(ssvid) if ssvid == ssvid and ssvid not in (None, "") else (str(r.mmsi) if str(r.mmsi).isdigit() else None)
         out.append({"id": str(r.mmsi), "name": None if name != name else name, "source": source,
+                    "mmsi": mmsi, "flag": None if flag != flag else flag,
                     "distance_m": round(dist), "minutes_from_pass": round(-hours * 60),
                     "speed_needed_kn": round(need_kn, 1), "ais_length_m": ais_len, "size": size,
                     "type": getattr(r, "type", None) if getattr(r, "type", None) == getattr(r, "type", None) else None,

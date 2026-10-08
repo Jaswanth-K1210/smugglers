@@ -318,7 +318,8 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
             except Exception:
                 gaps = None           # context failing must not fail the search
         progress("Scoring AIS coverage and nearby AIS candidates", 0.98)
-        gfw_c = ais.assign(sog=np.nan, cog=np.nan, length_m=np.nan, name=None) if len(ais) else None
+        gfw_c = ais.assign(sog=np.nan, cog=np.nan, length_m=np.nan,
+                           name=ais["name"] if "name" in ais else None) if len(ais) else None
         prelim = [{"length_m": float(r.hull_m if r.hull_m == r.hull_m else r.length_m),
                    "n_ais": int(r.n_identities)} for _, r in res.iterrows()]
         in_box = max(ais.mmsi.nunique() if len(ais) else 0, reg.mmsi.nunique() if reg_ok else 0)

@@ -219,6 +219,23 @@ def ais_for_pass(item, box):
         return pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"])
 
 
+def _from_cdse(item, box, folder, scene_note, err, progress):
+    """The same pass from CDSE when Planetary Computer fails; (tif, scene_note). Costs CDSE PU."""
+    from src import fetch_cdse
+    why = str(err) if isinstance(err, LookupError) else type(err).__name__
+    if not fetch_cdse.configured():
+        raise err
+    progress("Planetary Computer did not answer; fetching the same pass from CDSE", 0.2)
+    try:
+        tif, pu = fetch_cdse.fetch_vv(scene_time(item), box, folder / "cdse_vv.tif")
+    except Exception as e2:
+        raise LookupError(f"Planetary Computer failed ({why}) and the CDSE fallback failed too ({e2}).") from err
+    note = (f"Radar image from CDSE (Copernicus) because Planetary Computer did not answer; {pu:.0f} PU used. "
+            "Same pass, calibrated and converted to amplitude; the detector was trained on Planetary Computer "
+            "images, so results can differ slightly.")
+    return tif, " ".join(filter(None, [scene_note, note]))
+
+
 def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stage, frac: None, cache=CACHE):
     """Everything after the pass is chosen: download, detect, AIS, hulls, pairs, reasons."""
     from src.filters import clean_detections
@@ -235,7 +252,12 @@ def run_pass(item, box, weights, ais=None, scene_note=None, progress=lambda stag
         return {**json.loads(hit.read_text()), "cached": True}
 
     progress("Downloading the radar image", 0.15)
-    tif = fetch_s1.fetch(item, box=box, out_dir=Path(cache) / "scenes" / key)
+    try:
+        tif = fetch_s1.fetch(item, box=box, out_dir=Path(cache) / "scenes" / key)
+    except ValueError:
+        raise                                          # a request problem, not the server: CDSE would not help
+    except Exception as e:                             # Planetary Computer down or refusing, after its retries
+        tif, scene_note = _from_cdse(item, box, Path(cache) / "scenes" / key, scene_note, e, progress)
     t = scene_time(item)
 
     progress("Detecting ships", 0.4)

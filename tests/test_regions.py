@@ -78,3 +78,22 @@ def test_image_server_refusal_becomes_a_message(monkeypatch):
     monkeypatch.setattr(fetch_s1.requests, "get", lambda *a, **k: R())
     with pytest.raises(LookupError, match="limiting requests"):
         fetch_s1.sign("https://acct.blob.core.windows.net/cont/a.tif")
+
+
+def test_planetary_computer_timeouts_are_retried_then_explained(monkeypatch):
+    import pytest
+    from src import fetch_s1
+
+    class R:
+        def __init__(self, code): self.status_code = code
+        def raise_for_status(self): pass
+        def json(self): return {"token": "sig=y", "msft:expiry": "2099-01-01T00:00:00Z"}
+    monkeypatch.setattr(fetch_s1.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fetch_s1, "_tokens", {})
+    answers = iter([R(504), R(502), R(200)])                       # gateway timeouts, then a token
+    monkeypatch.setattr(fetch_s1.requests, "get", lambda *a, **k: next(answers))
+    assert fetch_s1.sign("https://acct.blob.core.windows.net/cont/a.tif").endswith("?sig=y")
+    monkeypatch.setattr(fetch_s1, "_tokens", {})
+    monkeypatch.setattr(fetch_s1.requests, "get", lambda *a, **k: R(504))
+    with pytest.raises(LookupError, match="not answering"):
+        fetch_s1.sign("https://acct.blob.core.windows.net/cont/b.tif")

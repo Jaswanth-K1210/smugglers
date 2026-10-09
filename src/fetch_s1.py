@@ -52,6 +52,9 @@ def utm_crs(box) -> str:
 # Keep GDAL from listing the whole blob container on every open.
 os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
 os.environ.setdefault("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tiff,.tif")
+# GDAL retries 429 / 502 / 503 / 504 on image reads itself when asked (off by default)
+os.environ.setdefault("GDAL_HTTP_MAX_RETRY", "5")
+os.environ.setdefault("GDAL_HTTP_RETRY_DELAY", "5")
 
 
 def search(start: str, end: str, box=None, limit: int = 50, mode: str = "IW"):
@@ -92,11 +95,20 @@ def sign(href: str) -> str:
         # comes back when one network address asks too often (seen from Modal).
         head = {"Ocp-Apim-Subscription-Key": os.environ["PC_SDK_SUBSCRIPTION_KEY"]} \
             if os.getenv("PC_SDK_SUBSCRIPTION_KEY") else {}
+        # 5xx (e.g. 504 from their gateway), timeouts and dropped connections are passing faults: retry too
+        r = None
         for i in range(5):
-            r = requests.get(f"{TOKEN}/{key[0]}/{key[1]}", headers=head, timeout=60)
-            if r.status_code not in (403, 429):
-                break
+            try:
+                r = requests.get(f"{TOKEN}/{key[0]}/{key[1]}", headers=head, timeout=60)
+                if r.status_code not in (403, 429) and r.status_code < 500:
+                    break
+            except (requests.ConnectionError, requests.Timeout):
+                r = None
             time.sleep(10 * (i + 1))
+        if r is None or r.status_code >= 500:
+            raise ImageServerBusy("The satellite image server (Planetary Computer) is not answering right now "
+                                  f"({'no response' if r is None else f'HTTP {r.status_code}'} after 5 tries). "
+                                  "Try again in a few minutes.")
         if r.status_code in (403, 429):
             raise ImageServerBusy("The satellite image server (Planetary Computer) is limiting requests "
                                   "right now. Try again in a few minutes.")

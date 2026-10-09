@@ -12,6 +12,7 @@ without loading the image-processing stack. src.fetch_s1 delegates here.
 """
 import math
 import os
+import time
 
 import requests
 
@@ -60,7 +61,15 @@ def stac_search(start, end, box, limit=1000, mode="IW", pages=1):
             "query": {"sar:instrument_mode": {"eq": mode}}, "limit": limit}
     url, feats = f"{STAC}/search", []
     for _ in range(pages):
-        r = requests.post(url, timeout=90, json=body)
+        for i in range(4):                       # 5xx and timeouts from the catalogue are passing faults
+            try:
+                r = requests.post(url, timeout=90, json=body)
+                if r.status_code < 500:
+                    break
+            except (requests.ConnectionError, requests.Timeout):
+                if i == 3:
+                    raise
+            time.sleep(5 * (i + 1))
         r.raise_for_status()
         j = r.json()
         feats += j.get("features", [])

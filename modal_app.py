@@ -27,7 +27,8 @@ if modal.is_local():                          # deploy time only: read .env, kee
         values["PC_SDK_SUBSCRIPTION_KEY"] = os.environ["PC_SDK_SUBSCRIPTION_KEY"]
     for key in ("AISSTREAM_API_KEY",            # live ship dots on the map; optional
                 "OPENWATERS_TOKEN",             # Open Waters shore AIS: higher area cap; optional
-                "VESSELAPI_KEY"):               # on-demand "Fill this view" (150 requests a month); optional
+                "VESSELAPI_KEY",                # on-demand "Fill this view" (150 requests a month); optional
+                "CDSE_CLIENT_ID", "CDSE_CLIENT_SECRET"):   # fallback imagery when Planetary Computer fails
         if os.getenv(key):
             values[key] = os.environ[key]
     values["GFW_API_TOKEN"] = GFW_API_TOKEN
@@ -95,4 +96,9 @@ def record_gulf_ais():
     ais.reload()
     n = regional_ais.record(regional_ais.fetch_gulf()[0])
     ais.commit()
+    try:                     # keep the Render backend awake: its free plan sleeps after 15 idle minutes,
+        import requests      # and every page load while it wakes fails (timeouts, CORS errors)
+        requests.get(os.getenv("BACKEND_HEALTH_URL", "https://smugglers.onrender.com/api/health"), timeout=60)
+    except Exception:
+        pass
     print(f"recorded {n} Gulf AIS rows")

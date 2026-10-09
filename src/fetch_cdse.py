@@ -132,6 +132,66 @@ def fetch(scene_time, box=None, name: str = None, confirm: bool = False, res=DST
     return dest
 
 
+# ── Fallback for the search: the same pass when Planetary Computer does not answer ──
+# VV only, as amplitude (square root of sigma-nought): the detector was trained on Planetary
+# Computer's GRD amplitude, so this keeps the brightness scale close; every tile is stretched
+# between its 1st and 99th percentile before detection anyway. Pixels without data are 0.
+VV_AMPLITUDE = """//VERSION=3
+function setup() {
+  return {input: ["VV", "dataMask"], output: {bands: 1, sampleType: "UINT16"}};
+}
+function evaluatePixel(s) { return [s.dataMask ? Math.max(1, Math.min(65535, Math.sqrt(s.VV) * 10000)) : 0]; }
+"""
+FALLBACK_MAX_PU = 200          # per pass and cell; a 50 km cell is ~60 PU
+
+
+def estimate_vv_pu(box, res=DST_RES):
+    """PU for one VV-only amplitude fetch of the box (one input band, x2 for orthorectification)."""
+    px = sum((b[2] - b[0]) / res * (b[3] - b[1]) / res for b in tiles(box, res))
+    return px / 512 ** 2 * (1 / 3) * 2
+
+
+def configured():
+    return bool(CDSE_CLIENT_ID and CDSE_CLIENT_SECRET)
+
+
+def fetch_vv(scene_time, box, dest: Path, res=DST_RES, max_pu=FALLBACK_MAX_PU):
+    """The pass at scene_time (+/- 3 min) over box as one-band VV amplitude GeoTIFF at dest.
+
+    Returns (path, PU charged). Raises RuntimeError if not configured, over max_pu, or empty."""
+    if not configured():
+        raise RuntimeError("CDSE is not configured (CDSE_CLIENT_ID / CDSE_CLIENT_SECRET).")
+    est = estimate_vv_pu(box, res)
+    if est > max_pu:
+        raise RuntimeError(f"CDSE fallback would cost ~{est:.0f} PU, over the {max_pu} PU limit per pass.")
+    t = pd.Timestamp(scene_time)
+    t = t.tz_localize("UTC") if t.tzinfo is None else t
+    t0 = (t - pd.Timedelta(minutes=3)).isoformat().replace("+00:00", "Z")
+    t1 = (t + pd.Timedelta(minutes=3)).isoformat().replace("+00:00", "Z")
+    head = {"Authorization": f"Bearer {_token()}"}
+    mems, parts, spent = [], [], 0.0
+    for b in tiles(box, res):
+        req = _request(b, t0, t1, res, utm_crs(box))
+        req["evalscript"] = VV_AMPLITUDE
+        req["input"]["data"][0]["dataFilter"]["polarization"] = "DV"
+        r = requests.post(PROCESS_URL, json=req, headers=head, timeout=300)
+        if r.status_code != 200:
+            raise RuntimeError(f"CDSE {r.status_code}: {r.text[:200]}")
+        spent += float(r.headers.get("x-processingunits-spent", 0))
+        mems.append(MemoryFile(r.content))
+        parts.append(mems[-1].open())
+    mosaic, transform = merge(parts)
+    if not (mosaic[0] > 0).any():
+        raise RuntimeError("CDSE has no image of this pass over this area.")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    profile = parts[0].profile | {"height": mosaic.shape[1], "width": mosaic.shape[2], "count": 1,
+                                  "transform": transform, "compress": "deflate", "nodata": 0}
+    with rasterio.open(dest, "w", **profile) as dst:
+        dst.write(mosaic[:1])
+    return dest, spent
+
+
 if __name__ == "__main__":
     print(f"one scene over the AOI: ~{estimate_pu():.0f} PU")
     if len(sys.argv) > 1:

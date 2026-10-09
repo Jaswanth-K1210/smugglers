@@ -49,8 +49,8 @@ STATIC_TTL = float(os.getenv("LIVE_STATIC_TTL_S", 24 * 3600))   # type / IMO / s
 # whole-world feed reaches 60-100k ships an hour, which overruns a 512 MB server. Past a cap
 # the oldest entries go first. Defaults fit Render's free 512 MB (~360 MB at the caps); the
 # Modal site (4 GB) raises them through the same variables.
-MAX_SHIPS = int(os.getenv("LIVE_MAX_SHIPS", 50_000))
-MAX_STATICS = int(os.getenv("LIVE_MAX_STATICS", 60_000))
+MAX_SHIPS = int(os.getenv("LIVE_MAX_SHIPS", 35_000))     # ~4 KB each with details: Render has 512 MB
+MAX_STATICS = int(os.getenv("LIVE_MAX_STATICS", 40_000))
 PRUNE_EVERY_S = 60
 _last_prune = {"t": 0.0}
 STATIC_PATH = Path(os.getenv("AIS_STATIC_PATH", Path(__file__).resolve().parents[2] / "data" / "ais_static.json"))
@@ -464,7 +464,7 @@ QUIET_KEEP_S = 24 * 3600
 QUIET_MIN_KN = 3.0             # slower ships are often entering port, anchoring or drifting
 QUIET_NEAR_KM = 20.0
 QUIET_MIN_HEARD = 2            # other ships heard in the last 10 min within QUIET_NEAR_KM
-QUIET_MAX = 20_000
+QUIET_MAX = 5_000
 QUIET_STATUS_SKIP = {1, 5, 6}  # at anchor, moored, aground: reports slow down legitimately
 quiet: dict = {}               # mmsi -> {off, on, heard_near, ...}
 _CELL = 0.25                   # degrees; heard-ship lookup grid

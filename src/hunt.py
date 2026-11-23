@@ -137,6 +137,10 @@ def check_ais(clean, box):
         cells[scene], ais[scene] = len(a), a
         res.append(dark_sts.characterise(g, a, buffer_m=2000, window_h=1))
         print(f"[{n}] {scene[:40]}  {len(a)} AIS cells")
+    if not any(cells.values()):
+        # Every scene empty is a GFW outage, not a sea with no AIS; going on would
+        # exclude every scene and overwrite the region's outputs with nothing.
+        raise RuntimeError("GFW returned no AIS for any scene (outage?); nothing written")
     res = pd.concat(res, ignore_index=True)
     bad = thin_scenes(cells)
     return res[~res.scene.isin(bad)].reset_index(drop=True), bad, ais
@@ -164,9 +168,15 @@ def hull_shape(res, k=30.0, half=40):
     """Measured hull length and beam (m) for every detection, from the image.
 
     Threshold at median + k MAD around the detection (the autolabel
-    calibration), take the bright component nearest the centre, and read its
+    calibration), take the bright component under the centre, and read its
     principal axes: for a rectangle, side = sqrt(12 * variance). The detection
     box is axis-aligned, so it cannot give the beam of a ship lying diagonally.
+
+    A bright ship images with thin range/azimuth sidelobe arms (the cross in
+    the chips). Counted as hull they inflate beam and length (Oman tier C read
+    94-170 m beams), so a 3 x 3 opening strips anything under 3 px (30 m) thick
+    first. A detection with no thick hull under it (it sits on an arm) gets NaN.
+    ponytail: hulls under 30 m wide vanish too; NaN is fine, they are never over-wide.
     """
     from scipy import ndimage
     hull, beam = np.full(len(res), np.nan), np.full(len(res), np.nan)
@@ -182,12 +192,13 @@ def hull_shape(res, k=30.0, half=40):
                     continue
                 med = np.median(water)
                 mad = max(np.median(np.abs(water - med)) * 1.4826, 1.0)
-                lab, n = ndimage.label(w > med + k * mad)
-                if n == 0:
+                core = ndimage.binary_opening(w > med + k * mad, structure=np.ones((3, 3)))
+                lab, _ = ndimage.label(core)
+                ids = lab[half - 4:half + 5, half - 4:half + 5]      # within 40 m of the centre
+                ids = ids[ids > 0]
+                if not ids.size:
                     continue
-                cents = ndimage.center_of_mass(w, lab, range(1, n + 1))
-                best = 1 + int(np.argmin([(y - half) ** 2 + (x - half) ** 2 for y, x in cents]))
-                ys, xs = np.where(lab == best)
+                ys, xs = np.where(lab == np.bincount(ids).argmax())
                 if len(ys) < 3:
                     continue
                 ev = np.sort(np.linalg.eigvalsh(np.cov(np.vstack([ys, xs]) * px)))

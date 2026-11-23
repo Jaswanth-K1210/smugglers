@@ -144,7 +144,7 @@ src/
   optical.py       Sentinel-2 cross-check of STS candidates
   evaluate.py      scene-level recall against AIS, threshold selection rule
   review.py        blind review sheet for choosing the cut-off (test plan T3)
-  model_select.py  detector families, trained on Skagen + Oman, tested on Laconia
+  model_select.py  detector families, leave-one-region-out (rotations() holds out each region)
 webapp/            FastAPI backend (app.py, feeds.py) + React frontend
 modal_app.py       deployment on Modal; modal_eval.py, modal_review.py run experiments there
 scripts/           check_live.py (live end-to-end checks), deploy_space.py (HF Space, PRO only)

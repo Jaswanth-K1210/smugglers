@@ -71,6 +71,31 @@ def test_hull_shape_separates_one_hull_from_two(tmp_path):
     assert s.beam_m[1] >= 1.6 * s.beam_m[0]
 
 
+def test_sidelobe_cross_is_not_beam(tmp_path):
+    """A very bright ship images with thin range/azimuth sidelobe arms; they are
+    not hull width (Oman tier C: 'beams' of 94-170 m were mostly this cross)."""
+    import numpy as np, rasterio
+    from rasterio.transform import from_origin
+    img = np.random.default_rng(0).normal(100, 5, (400, 400)).clip(1).astype("uint16")
+    img[100:106, 85:115] = 9000                      # tanker 300 m x 60 m ...
+    img[102:104, 40:160] = 6000                      # ... with a 2 px range arm
+    img[60:150, 99:101] = 6000                       # ... and a 2 px azimuth arm
+    img[300:312, 285:315] = 9000                     # rafted pair, 120 m across
+    img[305:307, 240:360] = 6000
+    img[260:350, 299:301] = 6000
+    tif = tmp_path / "s.tif"
+    with rasterio.open(tif, "w", driver="GTiff", height=400, width=400, count=1, dtype="uint16",
+                       crs="EPSG:32640", transform=from_origin(0, 4000, 10, 10)) as dst:
+        dst.write(img, 1)
+    res = pd.DataFrame([{"tif": str(tif), "x": 1000.0, "y": 4000 - 1030.0},     # on the tanker
+                        {"tif": str(tif), "x": 3000.0, "y": 4000 - 3060.0},     # on the pair
+                        {"tif": str(tif), "x": 1000.0, "y": 4000 - 1400.0}])    # on the arm only
+    s = hunt.hull_shape(res)
+    assert 280 <= s.hull_m[0] <= 330 and 55 <= s.beam_m[0] <= 75
+    assert s.beam_m[1] >= 1.6 * s.beam_m[0]
+    assert np.isnan(s.beam_m[2])                     # a sidelobe arm is not a ship
+
+
 def test_wide_cutoff_follows_length_band():
     rows = [{"category": "AIS_VISIBLE", "hull_m": 150, "beam_m": 50 + i % 10} for i in range(200)]
     rows += [{"category": "AIS_VISIBLE", "hull_m": 300, "beam_m": 70 + i % 10} for i in range(200)]
@@ -121,3 +146,11 @@ def test_one_long_hull_is_not_a_pair(tmp_path):
     assert hunt.one_hull(tif, pt(351, 52), pt(351, 105))       # 530 m apart on one streak
     assert hunt.one_hull(tif, pt(54, 201), pt(54, 234))        # dotted hull, 330 m
     assert hunt.one_hull(tif, pt(253, 65), pt(253, 95))        # partner on empty sea
+
+
+def test_gfw_outage_stops_before_writing(monkeypatch):
+    import pytest
+    monkeypatch.setattr(hunt, "_presence", lambda t, box: pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"]))
+    clean = pd.DataFrame([det("a", 25.0), det("b", 25.1)])
+    with pytest.raises(RuntimeError, match="GFW"):
+        hunt.check_ais(clean, hunt.REGIONS["oman"])

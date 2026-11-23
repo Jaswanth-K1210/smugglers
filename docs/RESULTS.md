@@ -279,7 +279,33 @@ All STS candidates (any AIS state): Oman 191 → 150, Laconia 4 → 3. The rule
 removed half of the AIS-unmatched candidates, consistent with the §4d chip
 review (12 of 30 were one hull). Tier C (one over-wide hull) does not use pairs
 and is unchanged. Chips after the final rule are on Drive
-(`hunt_*/sts_chips.png`) and have not yet been re-inspected.
+(`hunt_*/sts_chips.png`).
+
+**Tier C after the sidelobe fix (2026-11-24).** Chip review showed most Oman tier-C
+"over-wide" hulls were one bright ship whose thin range/azimuth sidelobe cross was
+counted as beam. `hull_shape` now drops features under 3 px (30 m) thick before
+measuring (notebook `07_tierc.ipynb`). Re-measured on the saved `all_checked.csv`
+detections; AIS matching is unchanged and was not re-queried (GFW's presence API
+was down: "temporarily unavailable ... upstream data dependency issue").
+
+| Oman, over-wide cutoff (p99 beam of AIS-matched ships) | < 200 m | 200–280 m | ≥ 280 m |
+| ------------------------------------------------------ | ------- | --------- | ------- |
+| before | 92 | 130 | 144 |
+| after | 92 | 124 | 137 |
+
+| AIS-unmatched STS (no GFW encounter) | A | B | C | Total |
+| ------------------------------------ | - | - | - | ----- |
+| Oman, after the sidelobe fix | 1 | 9 | **4** | **14** |
+| Laconia (no tier C) | 1 | – | – | 1 |
+
+Tier C kept: 2026-08-11 (beam 145.5 → 140.7 m), 2026-09-07 (133.8 → 134.4 m), both
+blocky side-by-side shapes in the chips; and two 2026-09-19 hulls just over the
+92 m cutoff (93.5, 101.7 m). Dropped 7, e.g. 2026-07-30 169.7 → 117.3 m; the
+2026-09-25 detection sat on a sidelobe arm with no hull under it (no beam).
+**Open:** wide detections went 79 → 73, of which 34 are newly over the lower
+cutoff; whether any is an AIS-unmatched STS needs AIS identity counts, so they
+wait for GFW. Two tier-B pairs (2026-07-17, 2026-07-23) look like one long hull
+in the chips and are still counted.
 
 ## 6. Multi-region detector (Skagen + Oman + Laconia)
 
@@ -335,6 +361,42 @@ labels are densest.
 **Deployment:** YOLO26n (`darksts/models/multi_yolo26n/weights/best.pt`) —
 highest overall and new-region vessel mAP50, and among the two fastest on CPU.
 RT-DETR-l is reported as the accuracy reference.
+
+### 6c. Leave-one-region-out (2026-11-24)
+
+`src/model_select.rotations()` (notebook `06_loro.ipynb`), Colab A100. Each region is held
+out once: models train on the other two (scene split for validation) and are tested on
+**all** tiles of the held-out region. Same 339 tiles, schedule and augmentation as §6b
+(80 epochs, imgsz 1024, seed 0); YOLO26n batch 16, RT-DETR-l batch 8. One seed per run.
+
+| Held-out region | Train / val tiles | Test tiles | Test boxes | YOLO26n vessel mAP50 | RT-DETR-l vessel mAP50 |
+| --------------- | ----------------- | ---------- | ---------- | -------------------- | ---------------------- |
+| Skagen | 133 / 36 | 170 | 504 | 0.428 | **0.509** |
+| Oman | 153 / 46 | 140 | 1590 | 0.122 | **0.140** |
+| Laconia | 228 / 82 | 29 | 37 | **0.217** | 0.183 |
+
+Precision / recall as printed by the run (mean over the classes present, so the Skagen
+row averages in the `sts` class, which the models barely learn): YOLO26n 0.257 / 0.289,
+0.323 / 0.329, 0.352 / 0.432; RT-DETR-l 0.762 / 0.332, 0.322 / 0.352, 0.340 / 0.378
+(Skagen, Oman, Laconia).
+
+**Reading.**
+- **A region the detector never saw is much harder than unseen scenes of a seen
+  region.** In §6b the same families score 0.51–0.56 vessel mAP50 on held-out *scenes*
+  of Oman and Laconia; with the whole region withheld they score 0.12–0.14 (Oman) and
+  0.18–0.22 (Laconia). The §6b figure measures within-region generalisation, not what a
+  user gets on a new area of sea.
+- **Oman is the hardest test:** the densest anchorage (1590 boxes on 140 tiles), where
+  hulls merge, and its labels are only the ships the Skagen detector found and GFW AIS
+  confirmed, so true detections of missed ships count as false positives. The score is
+  a lower bound, but still barely above the Skagen-only model on new regions (0.113, §6).
+- **Skagen held out scores highest (0.43–0.51), with a caveat:** the Oman / Laconia
+  pseudo-labels it trained on were produced by a Skagen-trained detector (§6), so
+  Skagen is not fully unseen upstream. Not comparable with §6's 0.367 (30 val tiles vs
+  all 170 here).
+- **No family wins:** RT-DETR-l leads on Skagen and Oman, YOLO26n on Laconia, whose 37
+  test boxes are too few to separate them. The served model (YOLO26n, bench/freeze.json)
+  is unchanged; this run did not tune anything.
 
 ## 7. Served detector (YOLO26n) recall against AIS, scene level
 

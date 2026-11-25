@@ -229,6 +229,10 @@ estimate and never a type; rafted vessels are not separable at 10 m, measured in
 
 ## Licence and attribution
 
+Code: **AGPL-3.0** (`LICENSE`), required because it builds on Ultralytics YOLO,
+which is AGPL-3.0. Labels, detections and weights: **CC BY-NC 4.0**
+(`DATA_LICENSE.md`), non-commercial because they derive from Global Fishing Watch data.
+
 Sentinel-1 data © ESA, via Microsoft Planetary Computer. AIS data © Danish
 Maritime Authority. Global Fishing Watch APIs are non-commercial use — GFW must
 be attributed in any publication from this work.

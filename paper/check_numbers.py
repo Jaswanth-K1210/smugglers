@@ -16,7 +16,7 @@ DERIVED = {
     "47.2": "Laconia matched share, 58 / 123 (§4e)",
     "0.054": "spread of overall mAP50 in §3, 0.402 - 0.348",
     "1.75": "AIS counting radius, 1 km + 750 m (§4d)",
-    "15": "AIS-unmatched STS after the sidelobe fix, 14 Oman + 1 Laconia (§4g)",
+    "12": "AIS-unmatched STS after all fixes, 11 Oman + 1 Laconia (§4g)",
 }
 NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w])")
 

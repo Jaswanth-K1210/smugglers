@@ -16,7 +16,7 @@
 Ship-to-Ship Transfer Candidates in Sentinel-1 SAR}
 
 \author{\IEEEauthorblockN{K.~Jaswanth}
-\IEEEauthorblockA{\tbd{Affiliation (or ``Independent researcher''), city, country, email}}}
+\IEEEauthorblockA{Independent Researcher, Hyderabad, India\\ koppisettyjaswanth@gmail.com}}
 
 \maketitle
 
@@ -33,7 +33,7 @@ reach vessel mAP50 of 0.51--0.56 on held-out scenes of the two added regions, ag
 0.11 for a single-region model, but only 0.12--0.22 when the test region is withheld
 from training entirely. Over three months in the Gulf of Oman, the pipeline
 flags 168 AIS-unmatched vessels of 100\,m or longer that GFW's own SAR detections also
-leave unmatched, and 15 AIS-unmatched STS candidates across two regions in three
+leave unmatched, and 12 AIS-unmatched STS candidates across two regions in three
 evidence tiers. No candidate is confirmed: Sentinel-2 images taken hours to days later
 neither confirm nor rule out any of 12 checked. Code and data are public at
 \tbd{\url{https://github.com/Jaswanth-K1210/smugglers}, DOI~10.5281/zenodo.XXXXXXX}.
@@ -45,15 +45,28 @@ SAR, Sentinel-1, ship detection, AIS, ship-to-ship transfer, open data
 
 \section{Introduction}
 \label{sec:intro}
-% TODO: write from these points; ~0.5 page.
-% - AIS gaps and why STS transfers matter (sanctions, illegal fishing) [miller2018]
-% - SAR sees ships regardless of cloud and AIS [torres2012]; commercial data is costly
-% - Absence of AIS is absence of evidence about AIS, not evidence of concealment:
-%   reception, coverage, equipment failure. Hence "AIS-unmatched", never "dark".
-% - Base paper: Ballinger [ballinger2024] detects dark STS from Sentinel-1 with deep
-%   learning. OpenSTS differs in: (i) free data end to end, including AIS outside
-%   Denmark via GFW; (ii) an audited auto-labeler with a measured effect;
-%   (iii) evidence tiers and an independent GFW cross-check instead of a binary label.
+% DRAFT by Claude from the notes: rewrite in your own words; check every claim
+% about the cited papers against the papers themselves.
+Ships switch off, lose or never fit the Automatic Identification System (AIS), and
+ship-to-ship (STS) transfers at sea are one way cargo changes hands outside port
+controls, a concern for sanctions enforcement and illegal fishing alike. AIS alone
+reveals transshipment only when both vessels broadcast \cite{miller2018}. Synthetic
+aperture radar (SAR) images ships through cloud and at night whether or not they
+transmit, and Sentinel-1 \cite{torres2012} provides it free of charge, whereas
+commercial SAR and AIS feeds are costly for researchers and small agencies.
+
+A ship that radar sees and AIS does not is not evidence of concealment: the gap can
+come from reception, coverage, equipment failure or processing. We therefore call such
+targets \emph{AIS-unmatched}, never ``dark'', and report them as candidates with the
+evidence for each, not as detections of wrongdoing.
+
+The closest work, Ballinger \cite{ballinger2024}, detects dark STS transfers in
+satellite imagery with deep learning. OpenSTS takes the same goal in a different
+direction: (i) only free data end to end, including AIS outside Denmark from Global
+Fishing Watch (GFW); (ii) an audited AIS-to-SAR auto-labeler whose effect on accuracy is
+measured; and (iii) graded evidence tiers with an independent GFW cross-check instead
+of a binary label.
+
 Contributions: (1) an open, reproducible pipeline and dataset using only free data;
 (2) an audit of AIS-based auto-labeling, showing that three label defects outweigh the
 choice of detector, and a leave-one-region-out test showing that scene-level splits
@@ -62,11 +75,16 @@ candidates with tiered evidence and stated limits.
 
 \section{Related Work}
 \label{sec:related}
-% TODO: ~0.3 page; cut first if over 4 pages.
-% - SAR ship detection datasets: SSDD [li2017], HRSID [wei2020], xView3-SAR [paolo2022]
-% - Global AIS-unmatched vessel mapping from Sentinel-1 [paolo2024]
-% - Transshipment from AIS alone [miller2018]; GFW encounter events [kroodsma2018]
-% - Ballinger [ballinger2024]: closest work; contrast as in Sec.~\ref{sec:intro}
+% DRAFT by Claude: rewrite; cut first if over 4 pages.
+SAR ship detection is commonly benchmarked on SSDD \cite{li2017} and HRSID
+\cite{wei2020}, small chips with manual boxes, and on xView3-SAR \cite{paolo2022},
+which pairs full Sentinel-1 scenes with AIS-derived labels to find vessels that do not
+broadcast. Paolo et al.\ \cite{paolo2024} extended this to a global map of vessels
+missing from public AIS. On the AIS side, GFW, building on \cite{kroodsma2018},
+publishes encounter events between broadcasting vessels, and Miller et
+al.\ \cite{miller2018} characterised transshipment from AIS alone; both see only
+vessels that transmit. Ballinger \cite{ballinger2024} combines the two views for STS;
+OpenSTS differs as set out above and adds tiers that state what the radar shows.
 
 \section{Data and Method}
 \label{sec:method}
@@ -118,7 +136,7 @@ pseudo-labels; tiles holding any unmatched or \emph{sts} detection are left out,
 possible ship is never taught as background. This uses GFW AIS positions, never GFW
 classifications, and is disclosed. The set has 339 tiles (Skagen 170, Oman 140, Laconia
 29), split by scene, never by tile (284 train / 55 validation). Five detectors
-\cite{ultralytics,rtdetr} are trained for 80 epochs at 1024\,px with SAR-appropriate
+\cite{ultralytics,yolo26,rtdetr} are trained for 80 epochs at 1024\,px with SAR-appropriate
 augmentation (no color jitter, full rotation, flips). % §6, §6b
 
 \textbf{Screening.} Detections pass land (1\,km), length and static-infrastructure
@@ -137,7 +155,8 @@ hull wider than the 99th-percentile beam of AIS-matched ships of its length band
 radar hulls within 1\,km minus AIS identities within 1.75\,km. A \emph{one-hull rule}
 prevents one long ship detected twice from counting as a pair: two detections are two
 ships only if each sits on its own bright hull, or if they lie side by side rather than
-along one hull's axis. % §4d, §4g
+along one hull's axis; two parts up to 200\,m apart count as one hull with a dark gap when each points along the
+line between the detections or is round, and at least one is long. % §4d, §4g
 
 \section{Experiments and Results}
 \label{sec:results}
@@ -250,12 +269,15 @@ Laconia, 25 unmatched ships are also unmatched by GFW. % §4b, §4c, §4e
 without a GFW encounter event; inspecting the top 30 found 4 strong and 9 plausible
 two-vessel configurations, but 12 were one hull detected twice. The one-hull rule
 reduced the set to 21 in Oman, and inspection showed most tier-C ``over-wide'' hulls
-were one bright ship whose thin sidelobe cross was measured as beam. Measuring beam
-after removing features thinner than 30\,m left \textbf{14 in Oman} (A\,1, B\,9,
-C\,4) and \textbf{1 in Laconia} (tier A, two parallel hulls with no AIS on either).
+were one bright ship whose thin sidelobe cross was measured as beam, and two tier-B
+pairs were one tanker whose bright bow and superstructure image apart; the Oman
+tier-A pair was two boxes on one tanker. Measuring beam
+after removing features thinner than 30\,m, and joining in-line parts up to 200\,m
+apart, left \textbf{11 in Oman} (B\,7, C\,4) and \textbf{1 in Laconia} (tier A,
+two parallel hulls with no AIS on either).
 GFW lists only 2 encounter events in the Oman area for the period, so it can neither
 confirm nor rule out these candidates. \tbd{Provisional: 34 newly over-wide detections
-await AIS counting (GFW presence API down); two tier-B pairs look like one hull.} % §4d, §4e, §4g
+await AIS counting (GFW presence API down).} % §4d, §4e, §4g
 
 \textbf{Optical check.} For 12 candidates (10 Oman, 2 Laconia, selected before the
 one-hull rule), the nearest clear Sentinel-2 L2A image within $\pm$5 days shows no pair
@@ -265,10 +287,12 @@ outcome either way: no confirmation and no contradiction. % §4f
 
 \begin{figure}[t]
 \centering
-\fbox{\parbox{0.95\columnwidth}{\centering\vspace{12mm}\tbd{TODO: detection examples
-per region + one tier-A STS chip (Drive: hunt\_*/sts\_chips.png)}\vspace{12mm}}}
-\caption{Detections in Skagen, Oman and Laconia, and an AIS-unmatched tier-A STS
-candidate.}
+\IfFileExists{fig2.pdf}{\includegraphics[width=\columnwidth]{fig2.pdf}}{%
+\fbox{\parbox{0.95\columnwidth}{\centering\vspace{12mm}\tbd{fig2.pdf: run notebook
+07\_tierc section 7, copy darksts/fig2.pdf into paper/}\vspace{12mm}}}}
+\caption{Sentinel-1 VV chips: AIS-unmatched vessels also unmatched by GFW in (a) Oman
+and (b) Laconia; (c) an Oman tier-C over-wide hull; (d) the Laconia tier-A pair, two
+parallel hulls with no AIS on either.}
 \label{fig:examples}
 \end{figure}
 
@@ -291,7 +315,6 @@ Contains modified Copernicus Sentinel-1 and Sentinel-2 data (2026). AIS data fro
 Danish Maritime Authority and Global Fishing Watch. Imagery accessed through Microsoft
 Planetary Computer.
 
-\nocite{*} % TEMP: remove once Intro/Related Work cite their refs
 \bibliographystyle{IEEEtran}
 \bibliography{refs}
 

@@ -148,6 +148,43 @@ def test_one_long_hull_is_not_a_pair(tmp_path):
     assert hunt.one_hull(tif, pt(253, 65), pt(253, 95))        # partner on empty sea
 
 
+def test_hull_split_by_a_dark_gap_is_one_ship(tmp_path):
+    """Oman tier B 07-17 / 07-23: two ~107 m boxes end to end on one ~300 m hull
+    whose middle images dark for ~80 m, wider than the bridge closes."""
+    import numpy as np, rasterio
+    from rasterio.transform import from_origin
+    img = np.random.default_rng(2).normal(100, 5, (300, 300)).clip(1).astype("uint16")
+    img[50:54, 50:64] = 5000            # bow, 140 m long
+    img[50:56, 79:90] = 5000            # superstructure, 150 m dark deck between, same line
+    img[150:156, 50:61] = 5000          # two ships in a line 300 m apart: still two
+    img[150:156, 91:102] = 5000
+    img[180:210, 220:226] = 5000        # Oman 09-25: one hull along the step ...
+    img[225:231, 205:240] = 5000        # ... one across it, 150 m below: two ships
+    img[250:256, 50:61] = 5000          # 80 m gap but 200 m off the line: two
+    img[270:276, 69:80] = 5000
+    tif = tmp_path / "s.tif"
+    t = from_origin(0, 3000, 10, 10)
+    with rasterio.open(tif, "w", driver="GTiff", height=300, width=300, count=1, dtype="uint16",
+                       crs="EPSG:32640", transform=t) as dst:
+        dst.write(img, 1)
+    from rasterio.warp import transform as tr
+    def pt(r, c):
+        x, y = t * (c + 0.5, r + 0.5)
+        (lon,), (lat,) = tr("EPSG:32640", "EPSG:4326", [x], [y])
+        return pd.Series({"x": x, "y": y, "lat": lat, "lon": lon})
+    assert hunt.one_hull(tif, pt(52, 57), pt(53, 84))          # one hull, dark middle
+    assert not hunt.one_hull(tif, pt(153, 55), pt(153, 96))    # gap 300 m: two ships
+    assert not hunt.one_hull(tif, pt(195, 223), pt(228, 222))  # different headings: two ships
+    assert not hunt.one_hull(tif, pt(253, 55), pt(273, 74))    # not on one line: two ships
+    img2 = img.copy()
+    img2[100:110, 50:60] = 9000         # round bright superstructure, no direction of its own
+    img2[103:107, 68:84] = 5000         # rest of the hull, 80 m on, same line
+    with rasterio.open(tif, "w", driver="GTiff", height=300, width=300, count=1, dtype="uint16",
+                       crs="EPSG:32640", transform=t) as dst:
+        dst.write(img2, 1)
+    assert hunt.one_hull(tif, pt(105, 55), pt(105, 76))        # blob + streak: one hull
+
+
 def test_gfw_outage_stops_before_writing(monkeypatch):
     import pytest
     monkeypatch.setattr(hunt, "_presence", lambda t, box: pd.DataFrame(columns=["mmsi", "lat", "lon", "timestamp"]))

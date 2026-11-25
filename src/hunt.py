@@ -50,6 +50,7 @@ near = dark_sts._metres_between
 THIN = 0.3            # a scene with < 30 % of the region's median AIS cells is unreliable
 DUP_M = 30            # closer than this is the same target detected twice
 RAFTED_M = 150        # centre spacing of two hulls moored side by side
+SPLIT_M = 200         # dark deck between a big tanker's bright bow and superstructure
 PAIR_M = 500          # the STS definition used in Phase 1
 BANDS = [(0, 200), (200, 280), (280, 10_000)]   # hull length bands for the beam cutoff
 COUNT_M = 1000        # radius for radar-vs-AIS counting (GFW grid is ~1 km)
@@ -227,7 +228,7 @@ def mark_wide(res, q=0.99, min_n=50):
     return out, cut
 
 
-def one_hull(tif, a, b, k=30.0, margin=20, along=0.8, bridge=3):
+def one_hull(tif, a, b, k=30.0, margin=40, along=0.8, bridge=3, info=None):
     """True when two pair detections are one radar object, not two ships.
 
     The main tier-B false alarm: one long hull, or a hull and its sidelobe
@@ -237,9 +238,14 @@ def one_hull(tif, a, b, k=30.0, margin=20, along=0.8, bridge=3):
     never two hulls. Closer, a rafted pair is also one component, so it is one
     hull only when the step from a to b runs along the component's long axis
     (|cos| > `along`); side by side is a rafted pair.
+
+    `info`, if a dict, is filled with what was seen (for diagnosis).
+    `margin` keeps the window mostly sea: a tight window around a big hull is
+    mostly ship, which lifts the median/MAD threshold and breaks the hull apart.
     """
     from scipy import ndimage
     with rasterio.open(tif) as s:
+        px = s.res[0]
         (ra, ca), (rb, cb) = s.index(a.x, a.y), s.index(b.x, b.y)
         r0, c0 = min(ra, rb) - margin, min(ca, cb) - margin
         w = s.read(1, window=rasterio.windows.Window(c0, r0, abs(cb - ca) + 2 * margin,
@@ -260,16 +266,39 @@ def one_hull(tif, a, b, k=30.0, margin=20, along=0.8, bridge=3):
         return int(np.bincount(ids).argmax()) if ids.size else 0
 
     la, lb = comp(ra - r0, ca - c0), comp(rb - r0, cb - c0)
+    if info is not None:
+        info.update(lab=lab, pa=(ra - r0, ca - c0), pb=(rb - r0, cb - c0), la=la, lb=lb)
     if la == 0 or lb == 0:          # no hull under a detection: sidelobe arm or ghost
         return True
+    step = np.array([rb - ra, cb - ca], float)
+
+    def heading(mask):          # True along the step, False across it, None if round
+        ys, xs = np.where(mask)
+        ev, vec = np.linalg.eigh(np.cov(np.vstack([ys, xs])))
+        if ev[1] < 4 * max(ev[0], 1e-9):              # under 2:1: no heading of its own
+            return None
+        return bool(abs(vec[:, -1] @ step) / max(np.linalg.norm(step), 1e-9) > along)
+
     if la != lb:
-        return False
+        # One hull whose middle images dark (Oman tier B 07-17, 07-23): on a big
+        # tanker only the bow and the superstructure are bright, so it images as
+        # parts end to end, up to SPLIT_M apart. Each part must point along the
+        # step or be round (a superstructure blob has no heading), and one must
+        # be long, or nothing shows a hull; two hulls at different headings
+        # (09-25) stay two. Two ships in a line that close
+        # are no side-by-side transfer either, so dropping them costs little.
+        gap = ndimage.distance_transform_edt(lab != la)[lab == lb].min() * px + 2 * bridge * px
+        if info is not None:
+            info["gap_m"] = round(float(gap))
+        if gap > SPLIT_M:
+            return False
+        ha, hb = heading(bright & (lab == la)), heading(bright & (lab == lb))   # undilated shape
+        return ha is not False and hb is not False and bool(ha or hb)   # one must show the line
     if near(a.lat, a.lon, b.lat, b.lon) > RAFTED_M:
         return True
     ys, xs = np.where(lab == la)
-    axis = np.linalg.eigh(np.cov(np.vstack([ys, xs])))[1][:, -1]     # long axis (row, col)
-    step = np.array([rb - ra, cb - ca], float)
-    return bool(abs(axis @ step) / max(np.linalg.norm(step), 1e-9) > along)
+    ax = np.linalg.eigh(np.cov(np.vstack([ys, xs])))[1][:, -1]
+    return bool(abs(ax @ step) / max(np.linalg.norm(step), 1e-9) > along)
 
 
 def sts_candidates(res):
@@ -278,7 +307,7 @@ def sts_candidates(res):
     One row per candidate, merged when two lines of evidence point at the same
     spot (<= RAFTED_M) in the same scene.
     """
-    rows = []
+    rows, failed = [], []
     for scene, g in res.groupby("scene"):
         g = g.reset_index(drop=True)
         la, lo = g.lat.to_numpy(), g.lon.to_numpy()
@@ -289,8 +318,8 @@ def sts_candidates(res):
                 try:
                     if one_hull(a.tif, a, b):
                         continue
-                except Exception:                     # scene not on disk: keep the pair
-                    pass
+                except Exception as e:                # keep the pair, but say so
+                    failed.append(f"{scene[:30]}: {type(e).__name__}: {e}")
                 rows.append({"scene": scene, "time": a.time, "tif": a.tif,
                              "lat": (a.lat + b.lat) / 2, "lon": (a.lon + b.lon) / 2,
                              "x": (a.x + b.x) / 2, "y": (a.y + b.y) / 2,
@@ -303,6 +332,8 @@ def sts_candidates(res):
                          "x": r.x, "y": r.y, "spacing_m": 0, "length_m": r.length_m, "conf": r.conf,
                          "beam_m": r.get("beam_m", np.nan),
                          "evidence": "sts_class" if r.cls == "sts" else "wide"})
+    if failed:
+        print(f"   one_hull failed on {len(failed)} pair(s), kept unchecked; first: {failed[0]}")
     c = pd.DataFrame(rows)
     if c.empty:
         return c

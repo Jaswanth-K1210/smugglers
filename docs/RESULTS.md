@@ -304,8 +304,26 @@ blocky side-by-side shapes in the chips; and two 2026-09-19 hulls just over the
 2026-09-25 detection sat on a sidelobe arm with no hull under it (no beam).
 **Open:** wide detections went 79 → 73, of which 34 are newly over the lower
 cutoff; whether any is an AIS-unmatched STS needs AIS identity counts, so they
-wait for GFW. Two tier-B pairs (2026-07-17, 2026-07-23) look like one long hull
-in the chips and are still counted.
+wait for GFW.
+
+**Tier B after the split-hull fix (2026-11-25).** Two tier-B pairs (2026-07-17,
+2026-07-23) were one tanker: only the bow and the superstructure image brightly, so
+`one_hull` saw two parts 139 m and 178 m apart, beyond its ~60 m bridge. Parts up to
+200 m apart now count as one hull when each points along the line between the
+detections or is round (no heading of its own) and at least one is long; 2026-09-25,
+a hull across that line 187 m away, stays two. Re-run on the saved detections of the
+tier-B scenes (notebook `07_tierc.ipynb` §5, §5b):
+
+| AIS-unmatched STS (no GFW encounter) | A | B | C | Total |
+| ------------------------------------ | - | - | - | ----- |
+| Oman, after both fixes | 0 | **7** | 4 | **11** |
+| Laconia | 1 | – | – | 1 |
+| Both regions | 1 | 7 | 4 | **12** |
+
+Dropped: 2026-07-17 (spacing 249 m), 2026-07-23 (181 m), and the Oman tier-A pair
+2026-09-22 (spacing 39 m, ~325 m: two boxes on one tanker). Laconia's tier-A pair
+(2026-09-03, two parallel hulls 74 m apart) stays. Re-check of tiers A+B, §5:
+Oman 10 → 7, Laconia 1 → 1.
 
 ## 6. Multi-region detector (Skagen + Oman + Laconia)
 
